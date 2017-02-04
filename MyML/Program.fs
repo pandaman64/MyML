@@ -1,4 +1,6 @@
-﻿module Program
+﻿//写経元: https://gist.github.com/praeclarum/5fbef41ea9c296590f23
+
+module Program
 
 open FParsec
 open Parser
