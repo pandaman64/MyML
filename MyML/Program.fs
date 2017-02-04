@@ -81,16 +81,42 @@ let alpha_transform expr =
 
 type TVar = TV of string
 
+[<StructuredFormatDisplayAttribute("{AsString}")>]
 type Type =   TVar of TVar 
             | TCon of string
             | TArrow of Type * Type
+with
+    override this.ToString() =
+        let str = match this with
+                  | TCon(x) -> x
+                  | TVar(TV(var)) -> var
+                  | TArrow(f,x) -> sprintf "%s -> %s" (f.ToString()) (x.ToString())
+        sprintf "(%s)" str
+    member this.AsString = this.ToString()
 
 let intType = TCon "Int"
 let boolType = TCon "Bool"
 
+[<StructuredFormatDisplayAttribute("{AsString}")>]
 type Scheme = Forall of TVar list * Type
-
+with
+    override this.ToString() =
+        match this with
+        | Forall(vars,t) ->
+            let varStrings = List.map (fun (TV(v)) -> "FA." + v) vars
+            let varsString = String.concat "" varStrings
+            varsString + t.ToString()
+    member this.AsString = this.ToString()
+    
+[<StructuredFormatDisplayAttribute("{AsString}")>]
 type TypeEnv = TypeEnv of Map<Var,Scheme>
+with
+    override this.ToString() =
+        match this with
+        | TypeEnv(env) ->
+            let strings = Seq.map (fun ((Var(v)),sc) -> sprintf "'%s' => %s" v (sc.ToString())) (Map.toSeq env)
+            sprintf "%A" strings
+    member this.AsString = this.ToString()
 
 let extend (TypeEnv env) (x,s) = TypeEnv(Map.add x s env)
 
@@ -111,6 +137,7 @@ type Type with
         | TArrow(f,x) ->
             TArrow(f.apply subst,x.apply subst)
         | _ -> this
+    
 
 type Scheme with
     member this.freeTypeVariables =
@@ -177,7 +204,7 @@ let instantiate (ts: Scheme) =
 //bind a name to type
 let varBind (var: TVar) (t: Type): Subst =
     match t with
-    | TVar(var) -> Map.empty //?
+    | TVar(_) -> Map.empty //?
     | _ when t.freeTypeVariables.Contains var ->
         failwithf "Occur check failed: %A -> %A" var t
     | _ -> singletonMap var t
@@ -196,6 +223,11 @@ let rec unify (t1: Type) (t2: Type): Subst =
 
 //型推論関数
 let rec infer (env: TypeEnv) (expr: Expr') : Subst * Type =
+    let infer env expr =
+        let subst,t = infer env expr
+        printfn "in the environment of %A" env
+        printfn "the type of %A is inferred as %A" expr t
+        subst,t
     match expr with
     | Num(_) -> Map.empty,intType
     | VarRef(name) -> 
@@ -209,13 +241,13 @@ let rec infer (env: TypeEnv) (expr: Expr') : Subst * Type =
     | Fun(arg,body) -> 
         match env with
         | TypeEnv(env) ->
-            let tv = newTyVar "a.arg"
+            let tv = newTyVar "a"
             //replace outer type variable named {arg} with fresh new variable
             let innerEnv = TypeEnv(Map.add arg (Forall([],tv)) env)
             let subst, t = infer innerEnv body
             subst, TArrow(tv.apply subst,t)
     | Apply'(f,x) -> 
-        let tv = newTyVar "a.ret"
+        let tv = newTyVar "a"
         let s1, t1 = infer env f
         let s2, t2 = infer (env.apply s1) x
         let s3 = unify (t1.apply s2) (TArrow(t2,tv)) //?
@@ -287,10 +319,12 @@ let main argv =
             f in
         id (const y x)"""*)
     let source = """
-        let rec fib x =
-            if (eq x 0) then 1
-            else (multiply x (fib (minus x 1))) in
-        fib"""
+        let id x = x in
+        let const x = 
+            let f y = x in
+            f in
+        const
+        """
     printfn "%s" source
     match run pexpr source with
     | Success(result,_,_) ->
@@ -303,6 +337,7 @@ let main argv =
             let multiply = (Var("multiply")), (Forall([],TArrow(intType,TArrow(intType,intType))))
             let eq = (Var("eq")), (Forall([],TArrow(intType,TArrow(intType,boolType))))
             let env = Map.ofList [plus;minus;multiply;eq]
+            let env = Map.empty
             TypeEnv(env)
         printfn "%A" (infer primitiveEnv result)
     | Failure(msg,_,_) -> printfn "%s" msg
