@@ -7,6 +7,7 @@ open Parser
 
 type Var = Var of string
 
+[<StructuredFormatDisplayAttribute("{AsString}")>]
 type Expr' =   Num of int
              | VarRef of Var
              | Fun of Var * Expr'
@@ -14,12 +15,21 @@ type Expr' =   Num of int
              | LetRec' of Var * Expr' * Expr'
              | Apply' of Expr' * Expr'
              | If' of Expr' * Expr' * Expr'
+with
+    override this.ToString() =
+        match this with
+        | Num(x) -> sprintf "%d" x
+        | VarRef(Var(name)) -> sprintf "'%s'" name
+        | Fun(Var(name),expr) -> sprintf "(fun '%s' -> %A)" name expr
+        | Let'(Var(name),value,inValue) -> sprintf "let '%s' = %A in %A" name value inValue
+        | LetRec'(Var(name),value,inValue) -> sprintf "let rec '%s' = %A in %A" name value inValue
+        | Apply'(f,x) -> sprintf "(%A %A)" f x
+        | If'(cond,ifTrue,ifFalse) -> sprintf "if %A then %A else %A" cond ifTrue ifFalse
+    member this.AsString = this.ToString()
 
 module Environment =
     type Environment = Map<Var,Expr'> list
     let empty:Environment = [Map.empty]
-    let push (env:Environment) = Map.empty :: env
-    let pop (env:Environment) = List.tail env
     let add v e (env:Environment) = 
         match env with
         | [] -> failwith "no environment"
@@ -31,52 +41,66 @@ module Environment =
             match Map.tryFind v e with
             | None -> tryFind v es
             | some -> some
+    let newVar =
+        let mutable counter = 0
+        let var v =
+            counter <- counter + 1
+            Var(sprintf "%s@%d" v counter)
+        var
 
-let alpha_transform expr =
+let transform_expr expr =
     let rec impl env expr =
         match expr with
         | Literal(x) -> Num(x)
         | If(cond,ifTrue,ifFalse) -> If'(impl env cond,impl env ifTrue,impl env ifFalse)
-        | Apply(f,xs) -> 
+        | Apply(f,xs) -> //currying
             match xs with
             | [] -> impl env f
             | xs ->
-                let rec impl' f xs =
+                let rec curry f xs =
                     match xs with
                     | [] -> f
-                    | x::xs -> impl' (Apply'(f,x)) xs 
-                impl' (impl env f) (List.map (impl env) xs)
+                    | x::xs -> curry (Apply'(f,x)) xs 
+                curry (impl env f) (List.map (impl env) xs)
         | Identifier(name) -> 
             match Environment.tryFind (Var(name)) env with
             //| None -> printfn "variable %s not found in %A" name env;failwith "variable not found"
-            | None -> printfn "variable not found '%s' in %A.\nType information of '%s' must be supplied later." name env name; VarRef(Var(name))
+            | None -> 
+                printfn "variable not found '%s' in %A.\nType information of '%s' must be supplied later." name env name;
+                VarRef(Var(name))
             | Some(e) -> e
         | Let(thisName,argName,value,inValue) -> 
             match argName with
             | None -> //alias
                 let value' = impl env value
-                let newEnv = Environment.add (Var(thisName)) value' env
-                Let'(Var(thisName),value',impl newEnv inValue)
+                let thisVar = Environment.newVar thisName
+                let newEnv = Environment.add (Var(thisName)) (VarRef(thisVar)) env
+                Let'(thisVar,value',impl newEnv inValue)
             | Some(x) -> //function definition
-                let var = Var(x)
-                let innerEnv = Environment.add var (VarRef(var)) (Environment.push env)
-                let value' = impl innerEnv value
-                let this = Fun(var,value')
-                let newEnv = Environment.add (Var(thisName)) this env
-                Let'(Var(thisName),this,impl newEnv inValue)
+                let this = 
+                    let xVar = Environment.newVar x
+                    let value' = 
+                        let innerEnv = Environment.add (Var(x)) (VarRef(xVar)) env
+                        impl innerEnv value
+                    Fun(xVar,value')
+                let thisVar = Environment.newVar thisName
+                let newEnv = Environment.add (Var(thisName)) (VarRef(thisVar)) env
+                Let'(thisVar,this,impl newEnv inValue)
         | LetRec(thisName,argName,value,inValue) ->
-            let varThis = Var(thisName)
-            let env = Environment.add varThis (VarRef(varThis)) env
+            let thisVar = Environment.newVar thisName
+            let env = Environment.add (Var(thisName)) (VarRef(thisVar)) env
             match argName with
             | None -> //alias
                 let value' = impl env value
-                LetRec'(Var(thisName),value',impl env inValue)
+                LetRec'(thisVar,value',impl env inValue)
             | Some(x) -> //function definition
-                let var = Var(x)
-                let innerEnv = Environment.add var (VarRef(var)) (Environment.push env)
-                let value' = impl innerEnv value
-                let this = Fun(var,value')
-                LetRec'(Var(thisName),this,impl env inValue)
+                let xVar = Environment.newVar x
+                let this = 
+                    let value' = 
+                        let innerEnv = Environment.add (Var(x)) (VarRef(xVar)) env
+                        impl innerEnv value
+                    Fun(xVar,value')
+                LetRec'(thisVar,this,impl env inValue)
     impl Environment.empty expr
 
 type TVar = TV of string
@@ -132,7 +156,7 @@ type Type with
         match this with
         | TVar(var) ->
             match subst.TryFind var with
-            | None -> TVar(var)
+            | None -> this
             | Some(t) -> t
         | TArrow(f,x) ->
             TArrow(f.apply subst,x.apply subst)
@@ -186,14 +210,16 @@ let composeSubst (s1: Subst) (s2: Subst) =
 let newTyVar =
     let nextIndex = ref 1
     fun name ->
-        let name = sprintf "%s@%d" name !nextIndex
+        let name = sprintf "%s%d" name !nextIndex
         nextIndex := !nextIndex + 1
         TVar(TV(name))
 
 //replace all free type variables which don't appear in outer environment with ∀
+//∀の導入規則
 let generalize (env: TypeEnv) (t: Type) =
-    Forall(Set.toList (env.freeTypeVariables - t.freeTypeVariables),t)
+    Forall(Set.toList (t.freeTypeVariables - env.freeTypeVariables),t)
 //instantiate fresh new type variable for each ∀
+//∀の除去規則
 let instantiate (ts: Scheme) =
     match ts with
     | Forall(vars,t) ->
@@ -223,11 +249,6 @@ let rec unify (t1: Type) (t2: Type): Subst =
 
 //型推論関数
 let rec infer (env: TypeEnv) (expr: Expr') : Subst * Type =
-    let infer env expr =
-        let subst,t = infer env expr
-        printfn "in the environment of %A" env
-        printfn "the type of %A is inferred as %A" expr t
-        subst,t
     match expr with
     | Num(_) -> Map.empty,intType
     | VarRef(name) -> 
@@ -250,7 +271,7 @@ let rec infer (env: TypeEnv) (expr: Expr') : Subst * Type =
         let tv = newTyVar "a"
         let s1, t1 = infer env f
         let s2, t2 = infer (env.apply s1) x
-        let s3 = unify (t1.apply s2) (TArrow(t2,tv)) //?
+        let s3 = unify (t1.apply s2) (TArrow(t2,tv))
         composeSubst (composeSubst s3 s2) s1, tv.apply s3
     | Let'(name,this,body) -> 
         let s1, t1 = infer env this
@@ -283,9 +304,9 @@ let rec infer (env: TypeEnv) (expr: Expr') : Subst * Type =
         let subst = Seq.fold composeSubst nullSubst [sCond;sTrue;sFalse;s;]
         subst,tTrue
 
-let inferAll (env: TypeEnv) (expr: Expr') : Type =
+let inferScheme (env: TypeEnv) (expr: Expr') : Scheme =
     let s, t = infer env expr
-    t.apply s
+    generalize (env.apply s) (t.apply s)
 
 [<EntryPoint>]
 let main argv = 
@@ -319,26 +340,23 @@ let main argv =
             f in
         id (const y x)"""*)
     let source = """
-        let id x = x in
-        let const x = 
-            let f y = x in
-            f in
-        const
+        let f x = x x in
+        f
         """
     printfn "%s" source
     match run pexpr source with
     | Success(result,_,_) ->
-        //printfn "%A" result;
-        let result = alpha_transform result
-        //printfn "%A" result;
+        printfn "%A" result;
+        let result = transform_expr result
+        printfn "%A" result;
         let primitiveEnv =
             let plus = (Var("plus")), (Forall([],TArrow(intType,TArrow(intType,intType))))
             let minus = (Var("minus")), (Forall([],TArrow(intType,TArrow(intType,intType))))
             let multiply = (Var("multiply")), (Forall([],TArrow(intType,TArrow(intType,intType))))
             let eq = (Var("eq")), (Forall([],TArrow(intType,TArrow(intType,boolType))))
             let env = Map.ofList [plus;minus;multiply;eq]
-            let env = Map.empty
+            let env = Map.add (Var("undefined")) (let anyType = TV("a") in (Forall([anyType],TVar(anyType)))) env
             TypeEnv(env)
-        printfn "%A" (infer primitiveEnv result)
+        printfn "%A" (inferScheme primitiveEnv result)
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code

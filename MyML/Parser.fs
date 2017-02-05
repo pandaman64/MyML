@@ -80,15 +80,19 @@ let pvalue:MLParser<Expr> =
     let braced = between (pchar '(' >>. spaces) (pchar ')' >>. spaces) pexpr
     braced <|> pprimitive
 
-let papply:MLParser<Expr> = pvalue .>>. (many pvalue) |>> Apply
+let papplyOrValue:MLParser<Expr> = parse{
+    let! head,tail = pvalue .>>. (many pvalue)
+    match tail with
+    | [] -> return head //引数がないときはそのまま返す
+    | exprs -> return Apply(head,exprs) //あるときは適用して返す
+}
 
 pexprRef := spaces >>. choice [
     attempt pletrec;
     attempt plet;
     attempt pif;
     attempt pliteral;
-    attempt papply;
-    pidentifier
+    papplyOrValue
 ] .>> spaces
 
 let pletDecl:MLParser<Declaration> = parse{
