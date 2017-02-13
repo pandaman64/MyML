@@ -28,19 +28,10 @@ with
     member this.AsString = this.ToString()
 
 module Environment =
-    type Environment = Map<Var,Expr'> list
-    let empty:Environment = [Map.empty]
-    let add v e (env:Environment) = 
-        match env with
-        | [] -> failwith "no environment"
-        | e' :: es -> (Map.add v e e') :: es
-    let rec tryFind v (env:Environment) = 
-        match env with
-        | [] -> None
-        | e :: es -> 
-            match Map.tryFind v e with
-            | None -> tryFind v es
-            | some -> some
+    type Environment = Map<Var,Expr'>
+    let empty:Environment = Map.empty
+    let add = Map.add
+    let rec tryFind = Map.tryFind
     let newVar =
         let mutable counter = 0
         let var v =
@@ -48,60 +39,58 @@ module Environment =
             Var(sprintf "%s@%d" v counter)
         var
 
-let transform_expr expr =
-    let rec impl env expr =
-        match expr with
-        | Literal(x) -> Num(x)
-        | If(cond,ifTrue,ifFalse) -> If'(impl env cond,impl env ifTrue,impl env ifFalse)
-        | Apply(f,xs) -> //currying
-            match xs with
-            | [] -> impl env f
-            | xs ->
-                let rec curry f xs =
-                    match xs with
-                    | [] -> f
-                    | x::xs -> curry (Apply'(f,x)) xs 
-                curry (impl env f) (List.map (impl env) xs)
-        | Identifier(name) -> 
-            match Environment.tryFind (Var(name)) env with
-            //| None -> printfn "variable %s not found in %A" name env;failwith "variable not found"
-            | None -> 
-                printfn "variable not found '%s' in %A.\nType information of '%s' must be supplied later." name env name;
-                VarRef(Var(name))
-            | Some(e) -> e
-        | Let(thisName,argName,value,inValue) -> 
-            match argName with
-            | None -> //alias
-                let value' = impl env value
-                let thisVar = Environment.newVar thisName
-                let newEnv = Environment.add (Var(thisName)) (VarRef(thisVar)) env
-                Let'(thisVar,value',impl newEnv inValue)
-            | Some(x) -> //function definition
-                let this = 
-                    let xVar = Environment.newVar x
-                    let value' = 
-                        let innerEnv = Environment.add (Var(x)) (VarRef(xVar)) env
-                        impl innerEnv value
-                    Fun(xVar,value')
-                let thisVar = Environment.newVar thisName
-                let newEnv = Environment.add (Var(thisName)) (VarRef(thisVar)) env
-                Let'(thisVar,this,impl newEnv inValue)
-        | LetRec(thisName,argName,value,inValue) ->
+let rec transformExpr env expr =
+    match expr with
+    | Literal(x) -> Num(x)
+    | If(cond,ifTrue,ifFalse) -> If'(transformExpr env cond,transformExpr env ifTrue,transformExpr env ifFalse)
+    | Apply(f,xs) -> //currying
+        match xs with
+        | [] -> transformExpr env f
+        | xs ->
+            let rec curry f xs =
+                match xs with
+                | [] -> f
+                | x::xs -> curry (Apply'(f,x)) xs 
+            curry (transformExpr env f) (List.map (transformExpr env) xs)
+    | Identifier(name) -> 
+        match Environment.tryFind (Var(name)) env with
+        //| None -> printfn "variable %s not found in %A" name env;failwith "variable not found"
+        | None -> 
+            printfn "variable not found '%s' in %A.\nType information of '%s' must be supplied later." name env name;
+            VarRef(Var(name))
+        | Some(e) -> e
+    | Let(thisName,argName,value,inValue) -> 
+        match argName with
+        | None -> //alias
+            let value' = transformExpr env value
             let thisVar = Environment.newVar thisName
-            let env = Environment.add (Var(thisName)) (VarRef(thisVar)) env
-            match argName with
-            | None -> //alias
-                let value' = impl env value
-                LetRec'(thisVar,value',impl env inValue)
-            | Some(x) -> //function definition
+            let newEnv = Environment.add (Var(thisName)) (VarRef(thisVar)) env
+            Let'(thisVar,value',transformExpr newEnv inValue)
+        | Some(x) -> //function definition
+            let this = 
                 let xVar = Environment.newVar x
-                let this = 
-                    let value' = 
-                        let innerEnv = Environment.add (Var(x)) (VarRef(xVar)) env
-                        impl innerEnv value
-                    Fun(xVar,value')
-                LetRec'(thisVar,this,impl env inValue)
-    impl Environment.empty expr
+                let value' = 
+                    let innerEnv = Environment.add (Var(x)) (VarRef(xVar)) env
+                    transformExpr innerEnv value
+                Fun(xVar,value')
+            let thisVar = Environment.newVar thisName
+            let newEnv = Environment.add (Var(thisName)) (VarRef(thisVar)) env
+            Let'(thisVar,this,transformExpr newEnv inValue)
+    | LetRec(thisName,argName,value,inValue) ->
+        let thisVar = Environment.newVar thisName
+        let env = Environment.add (Var(thisName)) (VarRef(thisVar)) env
+        match argName with
+        | None -> //alias
+            let value' = transformExpr env value
+            LetRec'(thisVar,value',transformExpr env inValue)
+        | Some(x) -> //function definition
+            let xVar = Environment.newVar x
+            let this = 
+                let value' = 
+                    let innerEnv = Environment.add (Var(x)) (VarRef(xVar)) env
+                    transformExpr innerEnv value
+                Fun(xVar,value')
+            LetRec'(thisVar,this,transformExpr env inValue)
 
 type TVar = TV of string
 
@@ -190,6 +179,7 @@ type TypeEnv with
             let newScheme = Map.map (fun k (v: Scheme) -> v.apply subst) scheme
             TypeEnv(newScheme)
 
+//m1でm2を上書き
 let unionMap<'k,'v when 'k: comparison> (m1: Map<'k,'v>) (m2: Map<'k,'v>):Map<'k,'v> =
     if m1.Count = 0 then m2
     else
@@ -308,6 +298,66 @@ let inferScheme (env: TypeEnv) (expr: Expr') : Scheme =
     let s, t = infer env expr
     generalize (env.apply s) (t.apply s)
 
+type Decl' =   LetDecl' of Var * Expr'
+             | LetRecDecl' of Var * Expr'
+with
+    member this.Name = 
+        match this with
+        | LetDecl'(n,_) -> n
+        | LetRecDecl'(n,_) -> n
+    member this.Value = 
+        match this with
+        | LetDecl'(_,v) -> v
+        | LetRecDecl'(_,v) -> v
+
+let rec inferDeclarations (TypeEnv(externs)) (decls: Declaration list) : Map<Var,Expr' * Scheme> = 
+    let transformDecl (env: Environment.Environment) (decl: Declaration) : Decl' =
+        match decl with
+        | LetDecl(name,argument,body) -> 
+            match argument with
+            | None -> //alias
+                let body' = transformExpr env body
+                LetDecl'(Var(name),body')
+            | Some(x) -> //function definition 
+                let xVar = Environment.newVar x
+                let body' = 
+                    let innerEnv = Environment.add (Var(x)) (VarRef(xVar)) env
+                    transformExpr innerEnv body
+                let thisValue = Fun(xVar,body')
+                LetDecl'(Var(name),thisValue)
+        | LetRecDecl(name,argument,body) -> 
+            let thisVar = Var(name)
+            let thisRef = VarRef(thisVar)
+            let innerEnv = Environment.add thisVar thisRef env
+            match argument with
+            | None -> //alias
+                let body' = transformExpr innerEnv body
+                LetRecDecl'(thisVar,body')
+            | Some(x) -> //function definition
+                let xVar = Environment.newVar x
+                let body' = 
+                    let innerEnv = Environment.add (Var(x)) (VarRef(xVar)) innerEnv
+                    transformExpr innerEnv body
+                let thisValue = Fun(xVar,body')
+                LetRecDecl'(thisVar,body')
+    let inferDecl env (decl: Decl'): TypeEnv * Scheme = 
+        match decl with
+        | LetDecl'(name,this) -> 
+            let s1, t1 = infer env this
+            let newEnv = env.apply s1
+            newEnv,generalize newEnv t1
+        | LetRecDecl'(name,value) -> failwith "hoge"
+    let impl inferredDecls decl =
+        //type environment
+        let externTyEnv = Map.map (fun _ (_,scheme) -> scheme) inferredDecls
+        //name environment
+        let externEnv = Map.map (fun v (_,_) -> VarRef(v)) inferredDecls
+        let decl = transformDecl externEnv decl
+        let newTyEnv,scheme = inferDecl (TypeEnv(externTyEnv)) decl
+        Map.add decl.Name (decl.Value,scheme) inferredDecls
+    let externs = Map.map (fun var scheme -> (VarRef(var),scheme)) externs
+    List.fold impl externs decls
+
 [<EntryPoint>]
 let main argv = 
     (*let str = """
@@ -340,14 +390,18 @@ let main argv =
             f in
         id (const y x)"""*)
     let source = """
-        let f x = x x in
-        f
+        let id x = x;
+        let const x =
+            let f y = x in
+            f;
+        let succ x = plus x 1;
+        let main = succ (const (id 0) 3);
         """
     printfn "%s" source
-    match run pexpr source with
+    (*match run pexpr source with
     | Success(result,_,_) ->
         printfn "%A" result;
-        let result = transform_expr result
+        let result = transformExpr Environment.empty result
         printfn "%A" result;
         let primitiveEnv =
             let plus = (Var("plus")), (Forall([],TArrow(intType,TArrow(intType,intType))))
@@ -358,5 +412,13 @@ let main argv =
             let env = Map.add (Var("undefined")) (let anyType = TV("a") in (Forall([anyType],TVar(anyType)))) env
             TypeEnv(env)
         printfn "%A" (inferScheme primitiveEnv result)
+    | Failure(msg,_,_) -> printfn "%s" msg*)
+    match run pprogram source with
+    | Success(decls,_,_) -> 
+        let env =
+            let env = Map.add (Var("plus")) (Forall([],TArrow(intType,TArrow(intType,intType)))) Map.empty
+            TypeEnv(env)
+        let result = inferDeclarations env decls
+        printfn "%A" result
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code

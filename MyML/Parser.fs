@@ -9,8 +9,8 @@ type Expr =   Literal of int
             | Apply of Expr * Expr list
             | If of Expr * Expr * Expr
 
-type Declaration = LetDecl of string * string list * Expr
-                 | LetRecDecl of string * string list * Expr
+type Declaration = LetDecl of string * string option * Expr
+                 | LetRecDecl of string * string option * Expr
 
 type MLParser<'a> = Parser<'a,unit>
 
@@ -97,7 +97,7 @@ pexprRef := spaces >>. choice [
 
 let pletDecl:MLParser<Declaration> = parse{
     let! name = attempt (pstring "let" >>. spaces >>. pidentifierString)
-    let! parameters = many pidentifierString
+    let! parameters = opt pidentifierString
     do! pchar '=' >>. spaces
     let! bind = pexpr
     do! pchar ';' >>. spaces
@@ -106,7 +106,7 @@ let pletDecl:MLParser<Declaration> = parse{
 
 let pletrecDecl:MLParser<Declaration> = parse{
     let! name = attempt (pstring "let" >>. spaces >>. pstring "rec" >>. spaces >>. pidentifierString)
-    let! parameters = many pidentifierString
+    let! parameters = opt pidentifierString
     do! pchar '=' >>. spaces
     let! bind = pexpr
     do! pchar ';' >>. spaces
@@ -115,6 +115,6 @@ let pletrecDecl:MLParser<Declaration> = parse{
 
 let pdecls = 
     let pdeclOne = pletrecDecl <|> pletDecl
-    spaces >>. many (attempt pdeclOne)
+    spaces >>. many pdeclOne
 
-let pprogram = pdecls .>>. pexpr
+let pprogram = pdecls
