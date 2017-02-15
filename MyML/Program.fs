@@ -415,10 +415,13 @@ let main argv =
     | Failure(msg,_,_) -> printfn "%s" msg*)
     match run pprogram source with
     | Success(decls,_,_) -> 
-        let env =
+        (*let env =
             let env = Map.add (Var("plus")) (Forall([],TArrow(intType,TArrow(intType,intType)))) Map.empty
             TypeEnv(env)
         let result = inferDeclarations env decls
-        printfn "%A" result
+        printfn "%A" result*)
+        let externs,decls = AlphaTransform.alphaTransformDecls Set.empty decls
+        printfn "declared names: %A" externs
+        printfn "declarations: %A" decls
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code
