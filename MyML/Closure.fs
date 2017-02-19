@@ -184,14 +184,32 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
                                              |> Seq.map fst
                                              |> Set.ofSeq
                         let argument = Set.singleton argument
-                        printfn "free: %A local: %A external: %A" value.freeVariables localVariables externs
                         (Set.intersect value.freeVariables localVariables) - argument 
                     // we have to replace all the appearance of free variables with fresh new variables
                     // to keep the uniqueness of identifiers
                     let freeVariables = capturedVariables
                                         |> Set.map (fun name -> name,newVar name)
                                         |> Map.ofSeq
-                    ClosureDecl(Closure(name,{argument = argument; body = value},freeVariables))
+                    let body = 
+                        let rec replace expr = 
+                            match expr with
+                            | Literal(_) -> expr
+                            | ExternRef(name) ->
+                                match freeVariables.TryFind name with
+                                | None -> expr
+                                | Some(name) -> ExternRef(name)
+                            | Alias(name,argument,body) ->
+                                Alias(name,argument,replace body)
+                            | AliasRec(name,argument,body) ->
+                                AliasRec(name,argument,replace body)
+                            | Apply(f,x) ->
+                                Apply(replace f,replace x)
+                            | ApplyClosure(cls,freeVariables) ->
+                                ApplyClosure(replace cls,freeVariables)
+                            | If(cond,ifTrue,ifFalse) ->
+                                If(replace cond,replace ifTrue,replace ifFalse)
+                        replace value
+                    ClosureDecl(Closure(name,{argument = argument; body = body},freeVariables))
 
             let declBody,body = 
                 let externs = Map.add name decl externs
