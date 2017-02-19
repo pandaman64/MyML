@@ -392,7 +392,7 @@ let main argv =
     let source = """
         let id x = x;
         let const x =
-            let f y = x in
+            let f y = id x in
             f;
         let succ x = plus x 1;
         let zero = 0;

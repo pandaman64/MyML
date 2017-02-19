@@ -4,7 +4,9 @@ let Var = AlphaTransform.Var
 type Var = AlphaTransform.Var
 
 let freeVariablesString freeVariables =
-    Set.map (fun (AlphaTransform.Var(var)) -> var) freeVariables
+    freeVariables
+    |> Map.toSeq
+    |> Seq.map (fun ((AlphaTransform.Var(from)),(AlphaTransform.Var(to_))) -> sprintf "%s -> %s" from to_)
     |> String.concat " "
 
 type AlphaTransform.Expr
@@ -28,10 +30,10 @@ with
             let body = body.freeVariables
             Set.union value body - Set.singleton name
 
-type Closure = Closure of Var * Function
+type Closure = Closure of Var * Function * Map<Var,Var>
 with
     member this.Name =
-        let (Closure(name,_)) = this
+        let (Closure(name,_,_)) = this
         name
 and
     [<StructuredFormatDisplayAttribute("{AsString}")>]
@@ -92,7 +94,7 @@ and
             | FreeValue(name,_) -> name
             | FreeFunction(name,_) -> name
             | FreeRecFunction(name,_) -> name
-            | ClosureDecl(Closure(name,_)) -> name
+            | ClosureDecl(cls) -> cls.Name
         override this.ToString() =
         
             match this with
@@ -101,18 +103,16 @@ and
                 sprintf "function %s %s = %A" name argument body
             | FreeRecFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
                 sprintf "function rec %s %s = %A" name argument body
-            | ClosureDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body})) ->
-                sprintf "closure %s %s {%s} = %A" name argument (freeVariablesString body.freeVariables) body
+            | ClosureDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body},freeVariables)) ->
+                sprintf "closure %s %s {%s} = %A" name argument (freeVariablesString freeVariables) body
         member this.AsString = this.ToString()
 
-type Closure
-with
-    member this.freeVariables: Set<Var> =
-        match this with
-        | Closure(_,{argument = argument; body = body}) -> 
-            body.freeVariables - Set.singleton argument
-
-let newVar = AlphaTransform.newVar
+let newVar =
+    let mutable counter = 0
+    let func (AlphaTransform.Var(name)): Var =
+        counter <- counter + 1
+        Var(sprintf "%s_%d" name counter)
+    func
 
 let unionMap m1 m2 =
     Map.fold (fun m k v -> Map.add k v m) m1 m2
@@ -126,15 +126,15 @@ let addArgumentToExterns (argument: Option<Var>) (externs: Map<Var,Declaration>)
     | Some(argument) -> Map.add argument (FreeValue(argument,ExternRef(argument))) externs
 
 let rec applyFreeVariables (externs: Map<Var,Declaration>) (closure: Closure): Expr =
-    let freeVariables = closure.freeVariables
-    let folder applications variable =
-        match externs.TryFind variable with
+    let (Closure(_,_,freeVariables)) = closure
+    let folder applications from to_ =
+        match externs.TryFind from with
         | Some(ClosureDecl(closure)) -> 
             let value = applyFreeVariables externs closure
-            Map.add variable value applications
-        | Some(decl) -> Map.add variable (ExternRef(variable)) applications
+            Map.add to_ value applications
+        | Some(decl) -> Map.add to_ (ExternRef(from)) applications
         | None -> applications
-    let applications = Set.fold folder Map.empty freeVariables
+    let applications = Map.fold folder Map.empty freeVariables
     ApplyClosure(ExternRef(closure.Name),applications)
 
 let rec extractDeclarations (externs: Map<Var,Declaration>) (expr: AlphaTransform.Expr): Declaration list * Expr = 
@@ -181,11 +181,15 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (expr: AlphaTransfor
                 else
                     // the function has free varibales
                     // thus we have to treat this as a closure
-                    let decl = ClosureDecl(Closure(name,{argument = argument; body = value}))
+                    let decl = 
+                        // we have to replace all the appearance of free variables with fresh new variables
+                        // to keep the uniqueness of identifiers
+                        let freeVariables = value.freeVariables - Set.singleton argument
+                        let freeVariables = freeVariables
+                                            |> Set.map (fun name -> name,newVar name)
+                                            |> Map.ofSeq
+                        ClosureDecl(Closure(name,{argument = argument; body = value},freeVariables))
 
-                    // we have to replace all the appearance of free variables with fresh new variables
-                    // to keep the uniqueness of identifiers,
-                    // but we just ignore it here for the sake of simplicity
                     let externs = Map.add name decl externs
                     decl,externs
 
