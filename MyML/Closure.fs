@@ -29,6 +29,10 @@ with
             Set.union value body - Set.singleton name
 
 type Closure = Closure of Var * Function
+with
+    member this.Name =
+        let (Closure(name,_)) = this
+        name
 and
     [<StructuredFormatDisplayAttribute("{AsString}")>]
     Expr =   Literal of int
@@ -36,7 +40,7 @@ and
            | Alias of Var * Expr * Expr
            | AliasRec of Var * Expr * Expr
            | Apply of Expr * Expr
-           | ApplyClosure of Closure * Map<Var,Expr>
+           | ApplyClosure of Expr * Map<Var,Expr> 
            | If of Expr * Expr * Expr
     with
         member this.freeVariables: Set<Var> = 
@@ -48,7 +52,7 @@ and
             | AliasRec(v,value,body) ->
                 Set.union value.freeVariables body.freeVariables - Set.singleton v
             | Apply(f,x) -> Set.union f.freeVariables x.freeVariables
-            | ApplyClosure(Closure(var,closure),applicand) ->
+            | ApplyClosure(closure,applicand) ->
                 let keys = Map.toSeq applicand
                            |> Seq.map fst
                            |> Set.ofSeq
@@ -76,34 +80,30 @@ and
         member this.AsString = this.ToString()
 and
     Function = {argument: Var; body: Expr}
-
-[<StructuredFormatDisplayAttribute("{AsString}")>]
-type Declaration =   FreeValue of Var * Expr
+and
+    [<StructuredFormatDisplayAttribute("{AsString}")>]
+    Declaration =    FreeValue of Var * Expr
                    | FreeFunction of Var * Function
                    | FreeRecFunction of Var * Function
                    | ClosureDecl of Closure
-                   | ClosureRecDecl of Closure
-with
-    member this.Name: Var = 
-        match this with
-        | FreeValue(name,_) -> name
-        | FreeFunction(name,_) -> name
-        | FreeRecFunction(name,_) -> name
-        | ClosureDecl(Closure(name,_)) -> name
-        | ClosureRecDecl(Closure(name,_)) -> name
-    override this.ToString() =
+    with
+        member this.Name: Var = 
+            match this with
+            | FreeValue(name,_) -> name
+            | FreeFunction(name,_) -> name
+            | FreeRecFunction(name,_) -> name
+            | ClosureDecl(Closure(name,_)) -> name
+        override this.ToString() =
         
-        match this with
-        | FreeValue(AlphaTransform.Var(name),expr) -> sprintf "value %s = %A" name expr
-        | FreeFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
-            sprintf "function %s %s = %A" name argument body
-        | FreeRecFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
-            sprintf "function rec %s %s = %A" name argument body
-        | ClosureDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body})) ->
-            sprintf "closure %s %s {%s} = %A" name argument (freeVariablesString body.freeVariables) body
-        | ClosureRecDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body})) ->
-            sprintf "closure rec %s %s {%s} = %A" name argument (freeVariablesString body.freeVariables) body
-    member this.AsString = this.ToString()
+            match this with
+            | FreeValue(AlphaTransform.Var(name),expr) -> sprintf "value %s = %A" name expr
+            | FreeFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
+                sprintf "function %s %s = %A" name argument body
+            | FreeRecFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
+                sprintf "function rec %s %s = %A" name argument body
+            | ClosureDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body})) ->
+                sprintf "closure %s %s {%s} = %A" name argument (freeVariablesString body.freeVariables) body
+        member this.AsString = this.ToString()
 
 type Closure
 with
@@ -132,13 +132,10 @@ let rec applyFreeVariables (externs: Map<Var,Declaration>) (closure: Closure): E
         | Some(ClosureDecl(closure)) -> 
             let value = applyFreeVariables externs closure
             Map.add variable value applications
-        | Some(ClosureRecDecl(closure)) ->
-            let value = applyFreeVariables externs closure
-            Map.add variable value applications
         | Some(decl) -> Map.add variable (ExternRef(variable)) applications
         | None -> applications
     let applications = Set.fold folder Map.empty freeVariables
-    ApplyClosure(closure,applications)
+    ApplyClosure(ExternRef(closure.Name),applications)
 
 let rec extractDeclarations (externs: Map<Var,Declaration>) (expr: AlphaTransform.Expr): Declaration list * Expr = 
     match expr with
@@ -205,8 +202,6 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (expr: AlphaTransfor
     | AlphaTransform.Expr.VarRef(name) ->
         match externs.TryFind name with
         | Some(ClosureDecl(closure)) -> 
-            List.empty,applyFreeVariables externs closure
-        | Some(ClosureRecDecl(closure)) ->
             List.empty,applyFreeVariables externs closure
         | Some(decl) -> List.empty,ExternRef(decl.Name)
         | None ->

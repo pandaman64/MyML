@@ -424,10 +424,10 @@ let main argv =
         let result = inferDeclarations env decls
         printfn "%A" result*)
         let decls = AlphaTransform.alphaTransformDecls (Set.ofList ["plus"]) decls
-        printfn "declarations: %A" decls
+        //printfn "declarations: %A" decls
         let extractedDecls = Closure.transformDecls [Closure.Var("plus")] decls
-        printfn "closure extracted declarations:"
+        printfn "closure transformed declarations:"
         for decl in extractedDecls do
-            printfn "%A" decl
+            printfn "  %A" decl
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code
