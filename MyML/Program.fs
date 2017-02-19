@@ -395,7 +395,10 @@ let main argv =
             let f y = x in
             f;
         let succ x = plus x 1;
-        let main = succ (const (id 0) 3);
+        let zero = 0;
+        let three = 3;
+        let main = 
+            succ (const (id zero) three);
         """
     printfn "%s" source
     (*match run pexpr source with
@@ -420,8 +423,9 @@ let main argv =
             TypeEnv(env)
         let result = inferDeclarations env decls
         printfn "%A" result*)
-        let externs,decls = AlphaTransform.alphaTransformDecls Set.empty decls
-        printfn "declared names: %A" externs
+        let decls = AlphaTransform.alphaTransformDecls (Set.ofList ["plus"]) decls
         printfn "declarations: %A" decls
+        let extractedDecls = Closure.transformDecls [Closure.Var("plus")] decls
+        printfn "closure extracted declarations: %A" extractedDecls
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code

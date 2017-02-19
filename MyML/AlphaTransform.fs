@@ -114,4 +114,5 @@ let alphaTransformDecls externs decls =
             | Parser.Declaration.LetRecDecl(name,_,_) -> Var(name)
         let decl = alphaTransformDecl env decl
         (Map.add declVar (VarRef(declVar)) env,decl :: decls)
-    List.fold impl (env,[]) decls
+    let _,decls = List.fold impl (env,[]) decls
+    List.rev decls
