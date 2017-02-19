@@ -426,6 +426,8 @@ let main argv =
         let decls = AlphaTransform.alphaTransformDecls (Set.ofList ["plus"]) decls
         printfn "declarations: %A" decls
         let extractedDecls = Closure.transformDecls [Closure.Var("plus")] decls
-        printfn "closure extracted declarations: %A" extractedDecls
+        printfn "closure extracted declarations:"
+        for decl in extractedDecls do
+            printfn "%A" decl
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code

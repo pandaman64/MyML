@@ -3,31 +3,9 @@
 let Var = AlphaTransform.Var
 type Var = AlphaTransform.Var
 
-type Closure = Closure of Var * Function
-and
-     Expr =   Literal of int
-            | ExternRef of Var
-            | Alias of Var * Expr * Expr
-            | AliasRec of Var * Expr * Expr
-            | Apply of Expr * Expr
-            | ApplyClosure of Closure * Map<Var,Expr>
-            | If of Expr * Expr * Expr
-and
-    Function = {argument: Var; body: Expr}
-
-type Declaration =   FreeValue of Var * Expr
-                   | FreeFunction of Var * Function
-                   | FreeRecFunction of Var * Function
-                   | ClosureDecl of Closure
-                   | ClosureRecDecl of Closure
-with
-    member this.Name: Var = 
-        match this with
-        | FreeValue(name,_) -> name
-        | FreeFunction(name,_) -> name
-        | FreeRecFunction(name,_) -> name
-        | ClosureDecl(Closure(name,_)) -> name
-        | ClosureRecDecl(Closure(name,_)) -> name
+let freeVariablesString freeVariables =
+    Set.map (fun (AlphaTransform.Var(var)) -> var) freeVariables
+    |> String.concat " "
 
 type AlphaTransform.Expr
 with
@@ -50,24 +28,82 @@ with
             let body = body.freeVariables
             Set.union value body - Set.singleton name
 
-type Expr
+type Closure = Closure of Var * Function
+and
+    [<StructuredFormatDisplayAttribute("{AsString}")>]
+    Expr =   Literal of int
+           | ExternRef of Var
+           | Alias of Var * Expr * Expr
+           | AliasRec of Var * Expr * Expr
+           | Apply of Expr * Expr
+           | ApplyClosure of Closure * Map<Var,Expr>
+           | If of Expr * Expr * Expr
+    with
+        member this.freeVariables: Set<Var> = 
+            match this with
+            | Literal(_) -> Set.empty
+            | ExternRef(var) -> Set.singleton var
+            | Alias(v,value,body) -> 
+                Set.union value.freeVariables body.freeVariables - Set.singleton v
+            | AliasRec(v,value,body) ->
+                Set.union value.freeVariables body.freeVariables - Set.singleton v
+            | Apply(f,x) -> Set.union f.freeVariables x.freeVariables
+            | ApplyClosure(Closure(var,closure),applicand) ->
+                let keys = Map.toSeq applicand
+                           |> Seq.map fst
+                           |> Set.ofSeq
+                failwith "need consideration"
+            | If(cond,ifTrue,ifFalse) ->
+                Set.unionMany [cond.freeVariables; ifTrue.freeVariables; ifFalse.freeVariables]
+        override this.ToString() =
+            match this with
+            | Literal(x) -> sprintf "%d" x
+            | ExternRef(AlphaTransform.Var(x)) -> x
+            | Alias(AlphaTransform.Var(name),value,body) -> 
+                sprintf "alias %s = %A in %A" name value body
+            | AliasRec(AlphaTransform.Var(name),value,body) -> 
+                sprintf "alias rec %s = %A in %A" name value body
+            | Apply(f,x) ->
+                sprintf "(%A %A)" f x
+            | ApplyClosure(cls,application) -> 
+                let applicationString = application
+                                        |> Map.toSeq
+                                        |> Seq.map (fun (AlphaTransform.Var(name),value) -> sprintf "%s -> %A" name value)
+                                        |> String.concat " "
+                sprintf "(%A {%s})" cls applicationString
+            | If(cond,ifTrue,ifFalse) ->
+                sprintf "if %A then %A else %A" cond ifTrue ifFalse
+        member this.AsString = this.ToString()
+and
+    Function = {argument: Var; body: Expr}
+
+[<StructuredFormatDisplayAttribute("{AsString}")>]
+type Declaration =   FreeValue of Var * Expr
+                   | FreeFunction of Var * Function
+                   | FreeRecFunction of Var * Function
+                   | ClosureDecl of Closure
+                   | ClosureRecDecl of Closure
 with
-    member this.freeVariables: Set<Var> = 
+    member this.Name: Var = 
         match this with
-        | Literal(_) -> Set.empty
-        | ExternRef(var) -> Set.singleton var
-        | Alias(v,value,body) -> 
-            Set.union value.freeVariables body.freeVariables - Set.singleton v
-        | AliasRec(v,value,body) ->
-            Set.union value.freeVariables body.freeVariables - Set.singleton v
-        | Apply(f,x) -> Set.union f.freeVariables x.freeVariables
-        | ApplyClosure(Closure(var,closure),applicand) ->
-            let keys = Map.toSeq applicand
-                       |> Seq.map fst
-                       |> Set.ofSeq
-            failwith "need consideration"
-        | If(cond,ifTrue,ifFalse) ->
-            Set.unionMany [cond.freeVariables; ifTrue.freeVariables; ifFalse.freeVariables]
+        | FreeValue(name,_) -> name
+        | FreeFunction(name,_) -> name
+        | FreeRecFunction(name,_) -> name
+        | ClosureDecl(Closure(name,_)) -> name
+        | ClosureRecDecl(Closure(name,_)) -> name
+    override this.ToString() =
+        
+        match this with
+        | FreeValue(AlphaTransform.Var(name),expr) -> sprintf "value %s = %A" name expr
+        | FreeFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
+            sprintf "function %s %s = %A" name argument body
+        | FreeRecFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
+            sprintf "function rec %s %s = %A" name argument body
+        | ClosureDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body})) ->
+            sprintf "closure %s %s {%s} = %A" name argument (freeVariablesString body.freeVariables) body
+        | ClosureRecDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body})) ->
+            sprintf "closure rec %s %s {%s} = %A" name argument (freeVariablesString body.freeVariables) body
+    member this.AsString = this.ToString()
 
 type Closure
 with
