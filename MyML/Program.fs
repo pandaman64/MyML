@@ -397,6 +397,16 @@ let main argv =
         let succ x = plus x 1;
         let zero = 0;
         let three = 3;
+        let sum min = 
+            let helper max = 
+                let rec loop x =
+                    if (eq x max)
+                    then
+                        x
+                    else
+                        plus x (loop (succ x)) in
+                loop zero min in
+            helper;
         let main = 
             succ (const (id zero) three);
         """
@@ -423,9 +433,9 @@ let main argv =
             TypeEnv(env)
         let result = inferDeclarations env decls
         printfn "%A" result*)
-        let decls = AlphaTransform.alphaTransformDecls (Set.ofList ["plus"]) decls
+        let decls = AlphaTransform.alphaTransformDecls (Set.ofList ["plus"; "eq"]) decls
         //printfn "declarations: %A" decls
-        let extractedDecls = Closure.transformDecls [Closure.Var("plus")] decls
+        let extractedDecls = Closure.transformDecls [Closure.Var("plus"); Closure.Var("eq")] decls
         printfn "closure transformed declarations:"
         for decl in extractedDecls do
             printfn "  %A" decl

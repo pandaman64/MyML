@@ -5,8 +5,7 @@ type Var = AlphaTransform.Var
 
 let freeVariablesString freeVariables =
     freeVariables
-    |> Map.toSeq
-    |> Seq.map (fun ((AlphaTransform.Var(from)),(AlphaTransform.Var(to_))) -> sprintf "%s -> %s" from to_)
+    |> Seq.map (fun ((AlphaTransform.Var(v))) -> sprintf "%s" v)
     |> String.concat " "
 
 type AlphaTransform.Expr
@@ -30,7 +29,8 @@ with
             let body = body.freeVariables
             Set.union value body - Set.singleton name
 
-type Closure = Closure of Var * Function * Map<Var,Var>
+// name * body * captured variables
+type Closure = Closure of Var * Function * Set<Var>
 with
     member this.Name =
         let (Closure(name,_,_)) = this
@@ -45,22 +45,27 @@ and
            | ApplyClosure of Expr * Map<Var,Expr> 
            | If of Expr * Expr * Expr
     with
-        member this.freeVariables: Set<Var> = 
+        member this.freeVariables (locals: Map<Var,Declaration>): Set<Var> = 
             match this with
             | Literal(_) -> Set.empty
-            | ExternRef(var) -> Set.singleton var
+            | ExternRef(var) -> 
+                match locals.TryFind var with
+                | None -> Set.empty
+                | Some(decl) -> Set.singleton decl.Name
             | Alias(v,value,body) -> 
-                Set.union value.freeVariables body.freeVariables - Set.singleton v
+                Set.union (value.freeVariables locals) (body.freeVariables locals) - Set.singleton v
             | AliasRec(v,value,body) ->
-                Set.union value.freeVariables body.freeVariables - Set.singleton v
-            | Apply(f,x) -> Set.union f.freeVariables x.freeVariables
-            | ApplyClosure(closure,applicand) ->
-                let keys = Map.toSeq applicand
+                Set.union (value.freeVariables locals) (body.freeVariables locals) - Set.singleton v
+            | Apply(f,x) -> Set.union (f.freeVariables locals) (x.freeVariables locals)
+            | ApplyClosure(closure,application) ->
+                let keys = Map.toSeq application
                            |> Seq.map fst
                            |> Set.ofSeq
-                failwith "need consideration"
+                closure.freeVariables locals - keys
             | If(cond,ifTrue,ifFalse) ->
-                Set.unionMany [cond.freeVariables; ifTrue.freeVariables; ifFalse.freeVariables]
+                [cond; ifTrue; ifFalse]
+                |> List.map (fun x -> x.freeVariables locals)
+                |> Set.unionMany 
         override this.ToString() =
             match this with
             | Literal(x) -> sprintf "%d" x
@@ -76,7 +81,7 @@ and
                                         |> Map.toSeq
                                         |> Seq.map (fun (AlphaTransform.Var(name),value) -> sprintf "%s -> %A" name value)
                                         |> String.concat " "
-                sprintf "(%A {%s})" cls applicationString
+                sprintf "[%A {%s}]" cls applicationString
             | If(cond,ifTrue,ifFalse) ->
                 sprintf "if %A then %A else %A" cond ifTrue ifFalse
         member this.AsString = this.ToString()
@@ -125,17 +130,43 @@ let addArgumentToEnvironment (argument: Option<Var>) (externs: Map<Var,Declarati
     | None -> externs
     | Some(argument) -> Map.add argument (FreeValue(argument,ExternRef(argument))) externs
 
-let rec applyFreeVariables (externs: Map<Var,Declaration>) (closure: Closure): Expr =
-    let (Closure(_,_,freeVariables)) = closure
-    let folder applications from to_ =
-        match externs.TryFind from with
-        | Some(ClosureDecl(closure)) -> 
-            let value = applyFreeVariables externs closure
-            Map.add to_ value applications
-        | Some(decl) -> Map.add to_ (ExternRef(from)) applications
+let rec applyFreeVariables (externs: Map<Var,Declaration>) (name: Var) (freeVariables: Set<Var>): Expr =
+    let folder applications var =
+        match externs.TryFind var with
+        | Some(ClosureDecl(Closure(_,_,freeVariables))) -> 
+            let value = applyFreeVariables externs name freeVariables
+            Map.add var value applications
+        | Some(decl) -> Map.add var (ExternRef(var)) applications
         | None -> applications
-    let applications = Map.fold folder Map.empty freeVariables
-    ApplyClosure(ExternRef(closure.Name),applications)
+    let applications = Set.fold folder Map.empty freeVariables
+    ApplyClosure(ExternRef(name),applications)
+
+let capturedVariables (argument: Var) (value: Expr) (locals: Map<Var,Declaration>): Set<Var> =
+    let localVariables = Map.toSeq locals
+                            |> Seq.map fst
+                            |> Set.ofSeq
+    let argument = Set.singleton argument
+    (Set.intersect (value.freeVariables locals) localVariables) - argument
+
+let makeFunctionDecl (name: Var) (argument: Var) (value: Expr) (locals: Map<Var,Declaration>): Declaration =
+    // the argument is bound in this binding
+    let freeVariables = value.freeVariables locals - Set.singleton argument
+    if freeVariables.IsEmpty then 
+        // the function does not have free variables 
+        // thus we can treat this as a free function
+
+        // both 'name' and 'argument' are unique identifiers, 
+        // so simply reusing them will not affect the uniqueness of identifiers
+        // (maybe helpful for debugging if we append the function name to the name of this binding?) 
+        FreeFunction(name,{argument = argument; body = value})
+    else
+        // the function has free varibales
+        // thus we have to treat this as a closure
+
+        // captured variables of the closure have the same name in the original scope. 
+        // thus the uniqueness of identifiers will be broken after closure transformation
+        // but we just ignore them
+        ClosureDecl(Closure(name,{argument = argument; body = value},freeVariables))
 
 let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Declaration>) (expr: AlphaTransform.Expr): Declaration list * Expr = 
     match expr with
@@ -164,52 +195,7 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
         | Some(argument) -> 
             // if the value of this let binding has free variables, those may escape from the scope,
             // so we need to declare the function as a closure
-            let decl = 
-                // the argument is bound in this binding
-                let freeVariables = value.freeVariables - Set.singleton argument
-                if freeVariables.IsEmpty then 
-                    // the function does not have free variables 
-                    // thus we can treat this as a free function
-
-                    // both 'name' and 'argument' are unique identifiers, 
-                    // so simply reusing them will not affect the uniqueness of identifiers
-                    // (maybe helpful for debugging if we append the function name to the name of this binding?) 
-                    FreeFunction(name,{argument = argument; body = value})
-                else
-                    // the function has free varibales
-                    // thus we have to treat this as a closure
-
-                    let capturedVariables = 
-                        let localVariables = Map.toSeq locals
-                                             |> Seq.map fst
-                                             |> Set.ofSeq
-                        let argument = Set.singleton argument
-                        (Set.intersect value.freeVariables localVariables) - argument 
-                    // we have to replace all the appearance of free variables with fresh new variables
-                    // to keep the uniqueness of identifiers
-                    let freeVariables = capturedVariables
-                                        |> Set.map (fun name -> name,newVar name)
-                                        |> Map.ofSeq
-                    let body = 
-                        let rec replace expr = 
-                            match expr with
-                            | Literal(_) -> expr
-                            | ExternRef(name) ->
-                                match freeVariables.TryFind name with
-                                | None -> expr
-                                | Some(name) -> ExternRef(name)
-                            | Alias(name,argument,body) ->
-                                Alias(name,argument,replace body)
-                            | AliasRec(name,argument,body) ->
-                                AliasRec(name,argument,replace body)
-                            | Apply(f,x) ->
-                                Apply(replace f,replace x)
-                            | ApplyClosure(cls,freeVariables) ->
-                                ApplyClosure(replace cls,freeVariables)
-                            | If(cond,ifTrue,ifFalse) ->
-                                If(replace cond,replace ifTrue,replace ifFalse)
-                        replace value
-                    ClosureDecl(Closure(name,{argument = argument; body = body},freeVariables))
+            let decl = makeFunctionDecl name argument value locals
 
             let declBody,body = 
                 let externs = Map.add name decl externs
@@ -222,12 +208,52 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
             // so 'body' will be the evaluation of this expression
             newGlobals,body
     | AlphaTransform.Expr.LetRec(name,argument,value,body) ->
-        failwith "kangaeru"
+        // first, we assume this binding forms a free function
+        let declValue,value' = 
+            let externs = Map.add name (FreeValue(name,ExternRef(name))) externs
+            let locals = addArgumentToEnvironment argument locals
+            extractDeclarations externs locals value
+        match argument with
+        | None -> 
+            // if this let binding is alias, it will not escape from the scope, 
+            // so we don't treat it as closures 
+            let locals = Map.add name (FreeValue(name,value')) locals
+            let declBody,body = extractDeclarations externs locals body
+            List.append declValue declBody,Alias(name,value',body)
+        | Some(argument) -> 
+            // Now that we know the value of this let binding must be a closure,
+            // thus we have to extract it in the suitable environment
+            
+            // closure application rules can be computed from the former trial,
+            // we use this inside the recursive function
+            let rule = capturedVariables argument value' locals
+
+            let declValue,value = 
+                // the value must be in the local environment!
+                // we fill the unknown body with placeholders
+                let locals =  locals
+                              |> Map.add name 
+                                 (ClosureDecl(Closure(name,{argument = Var("placeholder"); body = ExternRef(Var("placeholder'"))},rule)))
+                let locals = Map.add argument (FreeValue(argument,ExternRef(argument))) locals
+                extractDeclarations externs locals value
+            
+            let decl = makeFunctionDecl name argument value locals
+
+            let declBody,body = 
+                let externs = Map.add name decl externs
+                extractDeclarations externs locals body
+                
+            // lift this let binding to the global scope
+            let newGlobals = decl :: List.append declValue declBody
+
+            // this let binding will be lifted to the global scope, 
+            // so 'body' will be the evaluation of this expression
+            newGlobals,body
     | AlphaTransform.Expr.VarRef(name) ->
         let variables = unionMap externs locals
         match variables.TryFind name with
-        | Some(ClosureDecl(closure)) -> 
-            List.empty,applyFreeVariables variables closure
+        | Some(ClosureDecl(Closure(name,_,freeVariables))) -> 
+            List.empty,applyFreeVariables variables name freeVariables
         | Some(decl) -> List.empty,ExternRef(decl.Name)
         | None ->
             printfn "%A not found in the scope" name 
@@ -250,7 +276,22 @@ let transformDecl (externs: Map<Var,Declaration>) (decl: AlphaTransform.Declarat
                 FreeValue(name,expr)
         decl :: decls
         |> List.rev // extracted declarations must come first because the body of 'decl' may depend on those declarations
-    | AlphaTransform.Declaration.LetRecDecl(name,argument,value) -> failwith "atode"
+    | AlphaTransform.Declaration.LetRecDecl(name,argument,value) -> 
+        let decls,expr =
+            let externs = Map.add name (FreeValue(name,ExternRef(name))) externs
+            let locals = argument
+                         |> Option.map (fun name -> name,FreeValue(name,ExternRef(name)))
+                         |> Option.toList
+                         |> Map.ofList
+            extractDeclarations externs locals value
+        let decl =
+            match argument with
+            | Some(argument) -> 
+                FreeFunction(name,{argument = argument; body = expr})
+            | None ->
+                FreeValue(name,expr)
+        decl :: decls
+        |> List.rev // extracted declarations must come first because the body of 'decl' may depend on those declarations
 
 let transformDecls (externs: Var seq) (decls: AlphaTransform.Declaration seq): Declaration list =
     let externs = 
