@@ -93,6 +93,7 @@ and
                    | FreeFunction of Var * Function
                    | FreeRecFunction of Var * Function
                    | ClosureDecl of Closure
+                   | ClosureRecDecl of Closure
     with
         member this.Name: Var = 
             match this with
@@ -100,8 +101,8 @@ and
             | FreeFunction(name,_) -> name
             | FreeRecFunction(name,_) -> name
             | ClosureDecl(cls) -> cls.Name
+            | ClosureRecDecl(cls) -> cls.Name
         override this.ToString() =
-        
             match this with
             | FreeValue(AlphaTransform.Var(name),expr) -> sprintf "value %s = %A" name expr
             | FreeFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
@@ -110,6 +111,8 @@ and
                 sprintf "function rec %s %s = %A" name argument body
             | ClosureDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body},freeVariables)) ->
                 sprintf "closure %s %s {%s} = %A" name argument (freeVariablesString freeVariables) body
+            | ClosureRecDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body},freeVariables)) ->
+                sprintf "closure rec %s %s {%s} = %A" name argument (freeVariablesString freeVariables) body
         member this.AsString = this.ToString()
 
 let newVar =
@@ -148,7 +151,7 @@ let capturedVariables (argument: Var) (value: Expr) (locals: Map<Var,Declaration
     let argument = Set.singleton argument
     (Set.intersect (value.freeVariables locals) localVariables) - argument
 
-let makeFunctionDecl (name: Var) (argument: Var) (value: Expr) (locals: Map<Var,Declaration>): Declaration =
+let makeFunctionDecl (name: Var) (argument: Var) (value: Expr) (locals: Map<Var,Declaration>) (ctor: Closure -> Declaration): Declaration =
     // the argument is bound in this binding
     let freeVariables = value.freeVariables locals - Set.singleton argument
     if freeVariables.IsEmpty then 
@@ -166,7 +169,7 @@ let makeFunctionDecl (name: Var) (argument: Var) (value: Expr) (locals: Map<Var,
         // captured variables of the closure have the same name in the original scope. 
         // thus the uniqueness of identifiers will be broken after closure transformation
         // but we just ignore them
-        ClosureDecl(Closure(name,{argument = argument; body = value},freeVariables))
+        ctor (Closure(name,{argument = argument; body = value},freeVariables))
 
 let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Declaration>) (expr: AlphaTransform.Expr): Declaration list * Expr = 
     match expr with
@@ -195,7 +198,7 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
         | Some(argument) -> 
             // if the value of this let binding has free variables, those may escape from the scope,
             // so we need to declare the function as a closure
-            let decl = makeFunctionDecl name argument value locals
+            let decl = makeFunctionDecl name argument value locals ClosureDecl
 
             let declBody,body = 
                 let externs = Map.add name decl externs
@@ -219,7 +222,7 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
             // so we don't treat it as closures 
             let locals = Map.add name (FreeValue(name,value')) locals
             let declBody,body = extractDeclarations externs locals body
-            List.append declValue declBody,Alias(name,value',body)
+            List.append declValue declBody,AliasRec(name,value',body)
         | Some(argument) -> 
             // Now that we know the value of this let binding must be a closure,
             // thus we have to extract it in the suitable environment
@@ -233,11 +236,11 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
                 // we fill the unknown body with placeholders
                 let locals =  locals
                               |> Map.add name 
-                                 (ClosureDecl(Closure(name,{argument = Var("placeholder"); body = ExternRef(Var("placeholder'"))},rule)))
+                                 (ClosureRecDecl(Closure(name,{argument = Var("placeholder"); body = ExternRef(Var("placeholder'"))},rule)))
                 let locals = Map.add argument (FreeValue(argument,ExternRef(argument))) locals
                 extractDeclarations externs locals value
             
-            let decl = makeFunctionDecl name argument value locals
+            let decl = makeFunctionDecl name argument value locals ClosureRecDecl
 
             let declBody,body = 
                 let externs = Map.add name decl externs
@@ -253,6 +256,8 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
         let variables = unionMap externs locals
         match variables.TryFind name with
         | Some(ClosureDecl(Closure(name,_,freeVariables))) -> 
+            List.empty,applyFreeVariables variables name freeVariables
+        | Some(ClosureRecDecl(Closure(name,_,freeVariables))) -> 
             List.empty,applyFreeVariables variables name freeVariables
         | Some(decl) -> List.empty,ExternRef(decl.Name)
         | None ->
