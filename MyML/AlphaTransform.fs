@@ -73,7 +73,7 @@ let rec alphaTransformExpr (env: Environment) (expr: Parser.Expr): Expr =
     | Parser.Expr.Identifier(name) -> 
         match env.TryFind (Var(name)) with
         | None ->
-            failwithf "variable '%s' not found" name 
+            failwithf "variable '%s' not found in %A" name env 
             //VarRef(newVar (sprintf "%s_notfound" name))
         | Some(expr) -> expr
 
@@ -97,8 +97,8 @@ let alphaTransformDecl (env: Environment) (expr: Parser.Declaration): Declaratio
         | Some(argument) ->
             let argumentVar = newVar argument
             let argumentRef = VarRef(argumentVar)
-            let env = Map.add thisVar thisRef env
-            let env = Map.add argumentVar argumentRef env
+            let env = Map.add (Var(name)) thisRef env
+            let env = Map.add (Var(argument)) argumentRef env
             let value = alphaTransformExpr env value
             LetRecDecl(thisVar,Some(argumentVar),value)
         | None ->
