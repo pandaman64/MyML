@@ -389,7 +389,7 @@ let main argv =
             let f y = x in
             f in
         id (const y x)"""*)
-    let source = """
+    (*let source = """
         let id x = x;
         let const x =
             let f y = id x in
@@ -409,6 +409,13 @@ let main argv =
             helper;
         let main = 
             succ (const (id zero) three);
+        """*)
+    let source = """
+        let const x =
+            let f y = x in
+            f;
+        let main = 
+            const 0 1;
         """
     printfn "%s" source
     (*match run pexpr source with
@@ -438,6 +445,18 @@ let main argv =
         let extractedDecls = Closure.transformDecls [Closure.Var("plus"); Closure.Var("eq")] decls
         printfn "closure transformed declarations:"
         for decl in extractedDecls do
+            printfn "  %A" decl
+        let typeEnv = 
+            [
+                TypeInference.Var("plus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
+                TypeInference.Var("eq"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType))
+            ]
+            |> Map.ofSeq
+            |> Map.map (fun _ t -> TypeInference.Scheme.fromType t)
+            |> TypeInference.TypeEnv
+        let inferredDecls = TypeInference.inferDecls typeEnv extractedDecls
+        printfn "type inferred declarations:"
+        for decl in inferredDecls do
             printfn "  %A" decl
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code
