@@ -298,9 +298,9 @@ let rec inferExpr (env: TypeEnv) (expr: Closure.Expr): Substitution * TypedExpr 
         let sf,ifFalse = inferExpr(env.Apply subst) ifFalse
         let subst = composeSubstitution subst sf
         let subst = unify (ifTrue.type_.Apply subst) (ifFalse.type_.Apply subst)
-        let cond = cond.value.WithType (cond.type_.Apply subst)
-        let ifTrue = ifTrue.value.WithType (ifTrue.type_.Apply subst)
-        let ifFalse = ifFalse.value.WithType (ifFalse.type_.Apply subst)
+        let cond = cond.Apply subst
+        let ifTrue = ifTrue.Apply subst
+        let ifFalse = ifFalse.Apply subst
         subst,If(cond,ifTrue,ifFalse).WithType ifTrue.type_
     | Closure.Alias(name,value,body) ->
         let sv,value = inferExpr env value
@@ -357,7 +357,7 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
         let s1,body = inferExpr env f.body
         let s2 = unify thisType (TArrow(argType,body.type_))
         let s = composeSubstitution s1 s2
-        let thisScheme = generalize (env.Apply s) thisType
+        let thisScheme = generalize (env.Apply s) (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}  
         s,FreeRecFunction(name,value)
     | Closure.ClosureDecl(Closure.Closure(name,f,capturedVariables)) ->

@@ -389,14 +389,13 @@ let main argv =
             let f y = x in
             f in
         id (const y x)"""*)
-    (*let source = """
+    let source = """
         let id x = x;
         let const x =
             let f y = id x in
             f;
         let succ x = plus x 1;
-        let zero = 0;
-        let three = 3;
+        let rec infinite x = infinite (succ x);
         let sum min = 
             let helper max = 
                 let rec loop x =
@@ -405,17 +404,9 @@ let main argv =
                         x
                     else
                         plus x (loop (succ x)) in
-                loop zero min in
+                loop min in
             helper;
-        let main = 
-            succ (const (id zero) three);
-        """*)
-    let source = """
-        let const x =
-            let f y = x in
-            f;
-        let main = 
-            const 0 1;
+        let main = sum 0 10;
         """
     printfn "%s" source
     (*match run pexpr source with
@@ -449,6 +440,7 @@ let main argv =
         let typeEnv = 
             [
                 TypeInference.Var("plus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
+                TypeInference.Var("minus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
                 TypeInference.Var("eq"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType))
             ]
             |> Map.ofSeq
