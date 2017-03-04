@@ -297,11 +297,12 @@ let rec inferExpr (env: TypeEnv) (expr: Closure.Expr): Substitution * TypedExpr 
         let subst = composeSubstitution subst st
         let sf,ifFalse = inferExpr(env.Apply subst) ifFalse
         let subst = composeSubstitution subst sf
-        let subst = unify (ifTrue.type_.Apply subst) (ifFalse.type_.Apply subst)
+        let sub = unify (ifTrue.type_.Apply subst) (ifFalse.type_.Apply subst)
+        let subst = composeSubstitution subst sub
         let cond = cond.Apply subst
         let ifTrue = ifTrue.Apply subst
         let ifFalse = ifFalse.Apply subst
-        subst,If(cond,ifTrue,ifFalse).WithType ifTrue.type_
+        subst,If(cond,ifTrue,ifFalse).WithType (ifTrue.type_.Apply subst)
     | Closure.Alias(name,value,body) ->
         let sv,value = inferExpr env value
         let env = (env.Apply sv).Add name (generalize (env.Apply sv) value.type_)

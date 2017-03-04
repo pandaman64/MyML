@@ -431,9 +431,9 @@ let main argv =
             TypeEnv(env)
         let result = inferDeclarations env decls
         printfn "%A" result*)
-        let decls = AlphaTransform.alphaTransformDecls (Set.ofList ["plus"; "eq"]) decls
+        let decls = AlphaTransform.alphaTransformDecls (Set.ofList ["plus"; "eq"; "minus"]) decls
         //printfn "declarations: %A" decls
-        let extractedDecls = Closure.transformDecls [Closure.Var("plus"); Closure.Var("eq")] decls
+        let extractedDecls = Closure.transformDecls [Closure.Var("plus"); Closure.Var("eq"); Closure.Var("eq")] decls
         printfn "closure transformed declarations:"
         for decl in extractedDecls do
             printfn "  %A" decl
