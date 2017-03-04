@@ -292,7 +292,7 @@ let transformDecl (externs: Map<Var,Declaration>) (decl: AlphaTransform.Declarat
         let decl =
             match argument with
             | Some(argument) -> 
-                FreeFunction(name,{argument = argument; body = expr})
+                FreeRecFunction(name,{argument = argument; body = expr})
             | None ->
                 FreeValue(name,expr)
         decl :: decls
