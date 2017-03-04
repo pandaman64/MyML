@@ -103,11 +103,10 @@ let composeSubstitutionMany (xs: Substitution seq): Substitution =
     Seq.fold composeSubstitution emptySubstitution xs
 
 let varBind (var: TyVar) (t: Type): Substitution =
-    if t.freeTypeVariables.Contains var 
-    then
-        failwithf "Occur check failed: %A -> %A" var t
-    else
-        Map.add var t emptySubstitution
+    match t with
+    | TVariable(var') when var = var' -> emptySubstitution
+    | _ when t.freeTypeVariables.Contains var -> failwithf "Occur check failed: %A -> %A" var t
+    | _ -> Map.add var t emptySubstitution
 
 let rec unify (t1: Type) (t2: Type): Substitution =
     match t1,t2 with
@@ -351,11 +350,11 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
     | Closure.FreeRecFunction(name,f) ->
         let thisType = newTyVar "t"
         let argType = newTyVar "t"
-        let env = 
+        let innerEnv = 
             let env = env.Add f.argument (Scheme.fromType argType)
             env.Add name (Scheme.fromType thisType)
-        let s1,body = inferExpr env f.body
-        let s2 = unify thisType (TArrow(argType,body.type_))
+        let s1,body = inferExpr innerEnv f.body
+        let s2 = unify (thisType.Apply s1) (TArrow(argType.Apply s1,body.type_.Apply s1))
         let s = composeSubstitution s1 s2
         let thisScheme = generalize (env.Apply s) (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}  
@@ -384,13 +383,13 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
         let captured = capturedVariables
                        |> Set.map (fun v -> v,newTyVar "t")
                        |> Map.ofSeq
-        let env = 
+        let innerEnv = 
             let env = env.Add f.argument (Scheme.fromType argType)
             let env = env.Add name (Scheme.fromType thisType)
             let capturedEnv = Map.map (fun _ t -> Scheme.fromType t) captured
                               |> TypeEnv
             env.Merge capturedEnv
-        let s1,body = inferExpr env f.body
+        let s1,body = inferExpr innerEnv f.body
         let captured = captured
                        |> Map.map (fun _ t -> t.Apply s1)
         let closureType =
@@ -398,8 +397,7 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
             TClosure(thisType.Apply s1,captured)
         let s2 = unify thisType closureType
         let s = composeSubstitution s1 s2
-        let thisScheme = generalize (env.Apply s) thisType
-        // probably `s` should be applied to body.type_
+        let thisScheme = generalize (env.Apply s) (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
         s,ClosureRecDecl(Closure(name,value,captured))
 
