@@ -98,6 +98,7 @@ let instantiate (scheme: Scheme): Type =
 let emptySubstitution: Substitution = Map.empty
 
 let composeSubstitution (s1: Substitution) (s2: Substitution): Substitution =
+    let s1 = s1 |> Map.map (fun k v -> v.Apply s2)
     Map.fold (fun s k v -> Map.add k v s) s1 s2
 let composeSubstitutionMany (xs: Substitution seq): Substitution =
     Seq.fold composeSubstitution emptySubstitution xs
