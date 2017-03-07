@@ -1,7 +1,6 @@
 ﻿module TypeInference
 
-type Var = Closure.Var
-let Var = Closure.Var
+open Common
 
 type TyVar = TyVar of string
 
@@ -199,13 +198,13 @@ type Type
 with
     member this.AsString =
         match this with
-        | TConstructor(AlphaTransform.Var(name)) -> name
+        | TConstructor(Var(name)) -> name
         | TVariable(TyVar(name)) -> name
         | TArrow(f,x) -> sprintf "%A -> %A" f x
         | TClosure(t,captured) -> 
             let capturedString = 
                 Map.toSeq captured
-                |> Seq.map (fun (AlphaTransform.Var(name),type_) -> sprintf "%s => %A" name type_)
+                |> Seq.map (fun (Var(name),type_) -> sprintf "%s => %A" name type_)
                 |> String.concat " "
             sprintf "%A {%s}" t capturedString
 
@@ -223,16 +222,16 @@ with
     member this.AsString =
         match this with
         | Literal(x) -> sprintf "%d" x
-        | ExternRef(AlphaTransform.Var(name)) -> name
-        | Alias(AlphaTransform.Var(name),value,body) ->
+        | ExternRef(Var(name)) -> name
+        | Alias(Var(name),value,body) ->
             sprintf "alias %s = %A in %A" name value body
-        | AliasRec(AlphaTransform.Var(name),value,body) ->
+        | AliasRec(Var(name),value,body) ->
             sprintf "alias rec %s = %A in %A" name value body
         | Apply(f,x) -> sprintf "(%A %A)" f x
         | ApplyClosure(f,applications) -> 
             let applicationString = 
                 Map.toSeq applications
-                |> Seq.map (fun (AlphaTransform.Var(name),expr) -> sprintf "%s => %A" name expr)
+                |> Seq.map (fun (Var(name),expr) -> sprintf "%s => %A" name expr)
                 |> String.concat " "
             sprintf "[%A %s]" f applicationString
         | If(cond,ifTrue,ifFalse) ->
@@ -252,22 +251,22 @@ type Declaration
 with
     member this.AsString =
         match this with
-        | FreeValue(AlphaTransform.Var(name),value) ->
+        | FreeValue(Var(name),value) ->
             sprintf "value %s = %A" name value
-        | FreeFunction(AlphaTransform.Var(name),f) -> 
+        | FreeFunction(Var(name),f) -> 
             sprintf "function <%s: %A> %A = %A" name f.type_ f.value.argument f.value.body
-        | FreeRecFunction(AlphaTransform.Var(name),f) -> 
+        | FreeRecFunction(Var(name),f) -> 
             sprintf "function rec <%s: %A> %A = %A" name f.type_ f.value.argument f.value.body
-        | ClosureDecl(Closure(AlphaTransform.Var(name),f,captured)) ->
+        | ClosureDecl(Closure(Var(name),f,captured)) ->
             let capturedString =
                 Map.toSeq captured
-                |> Seq.map (fun (AlphaTransform.Var(name),type_) -> sprintf "%s => %A" name type_)
+                |> Seq.map (fun (Var(name),type_) -> sprintf "%s => %A" name type_)
                 |> String.concat " "
             sprintf "closure <%s: %A> %A {%s} = %A" name f.type_ f.value.argument capturedString f.value.body
-        | ClosureRecDecl(Closure(AlphaTransform.Var(name),f,captured)) ->
+        | ClosureRecDecl(Closure(Var(name),f,captured)) ->
             let capturedString =
                 Map.toSeq captured
-                |> Seq.map (fun (AlphaTransform.Var(name),type_) -> sprintf "%s => %A" name type_)
+                |> Seq.map (fun (Var(name),type_) -> sprintf "%s => %A" name type_)
                 |> String.concat " "
             sprintf "closure rec <%s: %A> %A {%s} = %A" name f.type_ f.value.argument capturedString f.value.body
 

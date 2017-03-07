@@ -1,4 +1,5 @@
 ﻿open FParsec
+open Common
 
 [<EntryPoint>]
 let main argv = 
@@ -31,15 +32,15 @@ let main argv =
         printfn "%A" result*)
         let decls = AlphaTransform.alphaTransformDecls (Set.ofList ["plus"; "eq"; "minus"]) decls
         //printfn "declarations: %A" decls
-        let extractedDecls = Closure.transformDecls [Closure.Var("plus"); Closure.Var("eq"); Closure.Var("eq")] decls
+        let extractedDecls = Closure.transformDecls [Var("plus"); Var("eq"); Var("eq")] decls
         printfn "closure transformed declarations:"
         for decl in extractedDecls do
             printfn "  %A" decl
         let typeEnv = 
             [
-                TypeInference.Var("plus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
-                TypeInference.Var("minus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
-                TypeInference.Var("eq"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType))
+                Var("plus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
+                Var("minus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
+                Var("eq"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType))
             ]
             |> Map.ofSeq
             |> Map.map (fun _ t -> TypeInference.Scheme.fromType t)

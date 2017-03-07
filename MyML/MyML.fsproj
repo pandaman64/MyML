@@ -57,10 +57,12 @@
     <Compile Include="AssemblyInfo.fs" />
     <None Include="App.config" />
     <Content Include="packages.config" />
+    <Compile Include="Common.fs" />
     <Compile Include="Parser.fs" />
     <Compile Include="AlphaTransform.fs" />
     <Compile Include="Closure.fs" />
     <Compile Include="TypeInference.fs" />
+    <Compile Include="CodeGen.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

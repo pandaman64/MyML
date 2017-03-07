@@ -1,11 +1,10 @@
 ﻿module Closure
 
-let Var = AlphaTransform.Var
-type Var = AlphaTransform.Var
+open Common
 
 let freeVariablesString freeVariables =
     freeVariables
-    |> Seq.map (fun ((AlphaTransform.Var(v))) -> sprintf "%s" v)
+    |> Seq.map (fun (Var(v)) -> sprintf "%s" v)
     |> String.concat " "
 
 type AlphaTransform.Expr
@@ -69,17 +68,17 @@ and
         override this.ToString() =
             match this with
             | Literal(x) -> sprintf "%d" x
-            | ExternRef(AlphaTransform.Var(x)) -> x
-            | Alias(AlphaTransform.Var(name),value,body) -> 
+            | ExternRef(Var(x)) -> x
+            | Alias(Var(name),value,body) -> 
                 sprintf "alias %s = %A in %A" name value body
-            | AliasRec(AlphaTransform.Var(name),value,body) -> 
+            | AliasRec(Var(name),value,body) -> 
                 sprintf "alias rec %s = %A in %A" name value body
             | Apply(f,x) ->
                 sprintf "(%A %A)" f x
             | ApplyClosure(cls,application) -> 
                 let applicationString = application
                                         |> Map.toSeq
-                                        |> Seq.map (fun (AlphaTransform.Var(name),value) -> sprintf "%s -> %A" name value)
+                                        |> Seq.map (fun (Var(name),value) -> sprintf "%s -> %A" name value)
                                         |> String.concat " "
                 sprintf "[%A {%s}]" cls applicationString
             | If(cond,ifTrue,ifFalse) ->
@@ -104,20 +103,20 @@ and
             | ClosureRecDecl(cls) -> cls.Name
         override this.ToString() =
             match this with
-            | FreeValue(AlphaTransform.Var(name),expr) -> sprintf "value %s = %A" name expr
-            | FreeFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
+            | FreeValue(Var(name),expr) -> sprintf "value %s = %A" name expr
+            | FreeFunction(Var(name),{argument = Var(argument); body = body}) ->
                 sprintf "function %s %s = %A" name argument body
-            | FreeRecFunction(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body}) ->
+            | FreeRecFunction(Var(name),{argument = Var(argument); body = body}) ->
                 sprintf "function rec %s %s = %A" name argument body
-            | ClosureDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body},freeVariables)) ->
+            | ClosureDecl(Closure(Var(name),{argument = Var(argument); body = body},freeVariables)) ->
                 sprintf "closure %s %s {%s} = %A" name argument (freeVariablesString freeVariables) body
-            | ClosureRecDecl(Closure(AlphaTransform.Var(name),{argument = AlphaTransform.Var(argument); body = body},freeVariables)) ->
+            | ClosureRecDecl(Closure(Var(name),{argument = Var(argument); body = body},freeVariables)) ->
                 sprintf "closure rec %s %s {%s} = %A" name argument (freeVariablesString freeVariables) body
         member this.AsString = this.ToString()
 
 let newVar =
     let mutable counter = 0
-    let func (AlphaTransform.Var(name)): Var =
+    let func (Var(name)): Var =
         counter <- counter + 1
         Var(sprintf "%s_%d" name counter)
     func

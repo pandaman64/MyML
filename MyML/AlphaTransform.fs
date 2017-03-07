@@ -1,6 +1,6 @@
 ﻿module AlphaTransform
 
-type Var = Var of string
+open Common
 
 type Expr =   Literal of int
             | VarRef of Var
