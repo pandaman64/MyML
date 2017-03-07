@@ -4,13 +4,13 @@ open FParsec
 
 type Expr =   Literal of int
             | Identifier of string
-            | Let of string * string option * Expr * Expr
-            | LetRec of string * string option * Expr * Expr
+            | Let of string * string list * Expr * Expr
+            | LetRec of string * string list * Expr * Expr
             | Apply of Expr * Expr list
             | If of Expr * Expr * Expr
 
-type Declaration = LetDecl of string * string option * Expr
-                 | LetRecDecl of string * string option * Expr
+type Declaration = LetDecl of string * string list * Expr
+                 | LetRecDecl of string * string list * Expr
 
 type MLParser<'a> = Parser<'a,unit>
 
@@ -38,8 +38,7 @@ let pidentifier:MLParser<Expr> = pidentifierString |>> Identifier
 
 let plet:MLParser<Expr> = parse{
     let! name = attempt (pstring "let" >>. spaces >>. pidentifierString)
-    //let! parameters = many pidentifierString
-    let! parameters = opt pidentifierString
+    let! parameters = many pidentifierString
     do! pchar '=' >>. spaces
     let! bind = pexpr
     do! pstring "in" >>. spaces
@@ -49,8 +48,7 @@ let plet:MLParser<Expr> = parse{
 
 let pletrec:MLParser<Expr> = parse{
     let! name = attempt (pstring "let" >>. spaces >>. pstring "rec" >>. spaces >>. pidentifierString)
-    //let! parameters = many pidentifierString
-    let! parameters = opt pidentifierString
+    let! parameters = many pidentifierString
     do! pchar '=' >>. spaces
     let! bind = pexpr
     do! pstring "in" >>. spaces
@@ -97,7 +95,7 @@ pexprRef := spaces >>. choice [
 
 let pletDecl:MLParser<Declaration> = parse{
     let! name = attempt (pstring "let" >>. spaces >>. pidentifierString)
-    let! parameters = opt pidentifierString
+    let! parameters = many pidentifierString
     do! pchar '=' >>. spaces
     let! bind = pexpr
     do! pchar ';' >>. spaces
@@ -106,7 +104,7 @@ let pletDecl:MLParser<Declaration> = parse{
 
 let pletrecDecl:MLParser<Declaration> = parse{
     let! name = attempt (pstring "let" >>. spaces >>. pstring "rec" >>. spaces >>. pidentifierString)
-    let! parameters = opt pidentifierString
+    let! parameters = many pidentifierString
     do! pchar '=' >>. spaces
     let! bind = pexpr
     do! pchar ';' >>. spaces

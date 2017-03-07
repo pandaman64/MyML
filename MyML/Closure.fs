@@ -18,12 +18,12 @@ with
         | AlphaTransform.Expr.Apply(f,x) ->
             Set.union f.freeVariables x.freeVariables
         | AlphaTransform.Expr.Let(name,argument,value,body) ->
-            let argument = Option.toList argument |> Set.ofList
+            let argument = Set.ofList argument
             let value = value.freeVariables - argument
             let body = body.freeVariables
             Set.union value body - Set.singleton name
         | AlphaTransform.Expr.LetRec(name,argument,value,body) ->
-            let argument = name :: Option.toList argument |> Set.ofList
+            let argument = name :: argument |> Set.ofList
             let value = value.freeVariables - argument
             let body = body.freeVariables
             Set.union value body - Set.singleton name
@@ -85,7 +85,7 @@ and
                 sprintf "if %A then %A else %A" cond ifTrue ifFalse
         member this.AsString = this.ToString()
 and
-    Function = {argument: Var; body: Expr}
+    Function = {argument: Var list; body: Expr}
 and
     [<StructuredFormatDisplayAttribute("{AsString}")>]
     Declaration =    FreeValue of Var * Expr
@@ -104,14 +104,14 @@ and
         override this.ToString() =
             match this with
             | FreeValue(Var(name),expr) -> sprintf "value %s = %A" name expr
-            | FreeFunction(Var(name),{argument = Var(argument); body = body}) ->
-                sprintf "function %s %s = %A" name argument body
-            | FreeRecFunction(Var(name),{argument = Var(argument); body = body}) ->
-                sprintf "function rec %s %s = %A" name argument body
-            | ClosureDecl(Closure(Var(name),{argument = Var(argument); body = body},freeVariables)) ->
-                sprintf "closure %s %s {%s} = %A" name argument (freeVariablesString freeVariables) body
-            | ClosureRecDecl(Closure(Var(name),{argument = Var(argument); body = body},freeVariables)) ->
-                sprintf "closure rec %s %s {%s} = %A" name argument (freeVariablesString freeVariables) body
+            | FreeFunction(Var(name),{argument = argument; body = body}) ->
+                sprintf "function %s %A = %A" name argument body
+            | FreeRecFunction(Var(name),{argument = argument; body = body}) ->
+                sprintf "function rec %s %A = %A" name argument body
+            | ClosureDecl(Closure(Var(name),{argument = argument; body = body},freeVariables)) ->
+                sprintf "closure %s %A {%s} = %A" name argument (freeVariablesString freeVariables) body
+            | ClosureRecDecl(Closure(Var(name),{argument = argument; body = body},freeVariables)) ->
+                sprintf "closure rec %s %A {%s} = %A" name argument (freeVariablesString freeVariables) body
         member this.AsString = this.ToString()
 
 let newVar =
@@ -127,10 +127,8 @@ let unionMap m1 m2 =
 let unionMapMany ms =
     List.fold unionMap Map.empty ms
 
-let addArgumentToEnvironment (argument: Option<Var>) (externs: Map<Var,Declaration>) =
-    match argument with
-    | None -> externs
-    | Some(argument) -> Map.add argument (FreeValue(argument,ExternRef(argument))) externs
+let addArgumentToEnvironment (argument: Var list) (externs: Map<Var,Declaration>) =
+    List.fold (fun externs argument -> Map.add argument (FreeValue(argument,ExternRef(argument))) externs) externs argument
 
 let rec applyFreeVariables (externs: Map<Var,Declaration>) (name: Var) (freeVariables: Set<Var>): Expr =
     let folder applications var =
@@ -143,16 +141,16 @@ let rec applyFreeVariables (externs: Map<Var,Declaration>) (name: Var) (freeVari
     let applications = Set.fold folder Map.empty freeVariables
     ApplyClosure(ExternRef(name),applications)
 
-let capturedVariables (argument: Var) (value: Expr) (locals: Map<Var,Declaration>): Set<Var> =
+let capturedVariables (argument: Var list) (value: Expr) (locals: Map<Var,Declaration>): Set<Var> =
     let localVariables = Map.toSeq locals
                             |> Seq.map fst
                             |> Set.ofSeq
-    let argument = Set.singleton argument
+    let argument = Set.ofList argument
     (Set.intersect (value.freeVariables locals) localVariables) - argument
 
-let makeFunctionDecl (name: Var) (argument: Var) (value: Expr) (locals: Map<Var,Declaration>) (ctor: Closure -> Declaration): Declaration =
+let makeFunctionDecl (name: Var) (argument: Var list) (value: Expr) (locals: Map<Var,Declaration>) (ctor: Closure -> Declaration): Declaration =
     // the argument is bound in this binding
-    let freeVariables = value.freeVariables locals - Set.singleton argument
+    let freeVariables = value.freeVariables locals - Set.ofList argument
     if freeVariables.IsEmpty then 
         // the function does not have free variables 
         // thus we can treat this as a free function
@@ -188,13 +186,13 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
             let locals = addArgumentToEnvironment argument locals
             extractDeclarations externs locals value
         match argument with
-        | None -> 
+        | [] -> 
             // if this let binding is alias, it will not escape from the scope, 
             // so we don't treat it as closures 
             let locals = Map.add name (FreeValue(name,value)) locals
             let declBody,body = extractDeclarations externs locals body
             List.append declValue declBody,Alias(name,value,body)
-        | Some(argument) -> 
+        | argument -> 
             // if the value of this let binding has free variables, those may escape from the scope,
             // so we need to declare the function as a closure
             let decl = makeFunctionDecl name argument value locals ClosureDecl
@@ -216,13 +214,13 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
             let locals = addArgumentToEnvironment argument locals
             extractDeclarations externs locals value
         match argument with
-        | None -> 
+        | [] -> 
             // if this let binding is alias, it will not escape from the scope, 
             // so we don't treat it as closures 
             let locals = Map.add name (FreeValue(name,value')) locals
             let declBody,body = extractDeclarations externs locals body
             List.append declValue declBody,AliasRec(name,value',body)
-        | Some(argument) -> 
+        | argument -> 
             // Now that we know the value of this let binding must be a closure,
             // thus we have to extract it in the suitable environment
             
@@ -235,8 +233,10 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
                 // we fill the unknown body with placeholders
                 let locals =  locals
                               |> Map.add name 
-                                 (ClosureRecDecl(Closure(name,{argument = Var("placeholder"); body = ExternRef(Var("placeholder'"))},rule)))
-                let locals = Map.add argument (FreeValue(argument,ExternRef(argument))) locals
+                                 (ClosureRecDecl(Closure(name,{argument = [Var("placeholder")]; body = ExternRef(Var("placeholder'"))},rule)))
+                let locals = 
+                    argument
+                    |> List.fold (fun locals argument -> Map.add argument (FreeValue(argument,ExternRef(argument))) locals) locals
                 extractDeclarations externs locals value
             
             let decl = makeFunctionDecl name argument value locals ClosureRecDecl
@@ -268,32 +268,30 @@ let transformDecl (externs: Map<Var,Declaration>) (decl: AlphaTransform.Declarat
     | AlphaTransform.Declaration.LetDecl(name,argument,value) -> 
         let decls,expr =
             let locals = argument
-                         |> Option.map (fun name -> name,FreeValue(name,ExternRef(name)))
-                         |> Option.toList
+                         |> List.map (fun name -> name,FreeValue(name,ExternRef(name)))
                          |> Map.ofList
             extractDeclarations externs locals value
         let decl =
             match argument with
-            | Some(argument) -> 
-                FreeFunction(name,{argument = argument; body = expr})
-            | None ->
+            | [] ->
                 FreeValue(name,expr)
+            | argument -> 
+                FreeFunction(name,{argument = argument; body = expr})
         decl :: decls
         |> List.rev // extracted declarations must come first because the body of 'decl' may depend on those declarations
     | AlphaTransform.Declaration.LetRecDecl(name,argument,value) -> 
         let decls,expr =
             let externs = Map.add name (FreeValue(name,ExternRef(name))) externs
             let locals = argument
-                         |> Option.map (fun name -> name,FreeValue(name,ExternRef(name)))
-                         |> Option.toList
+                         |> List.map (fun name -> name,FreeValue(name,ExternRef(name)))
                          |> Map.ofList
             extractDeclarations externs locals value
         let decl =
             match argument with
-            | Some(argument) -> 
-                FreeRecFunction(name,{argument = argument; body = expr})
-            | None ->
+            | [] ->
                 FreeValue(name,expr)
+            | argument -> 
+                FreeRecFunction(name,{argument = argument; body = expr})
         decl :: decls
         |> List.rev // extracted declarations must come first because the body of 'decl' may depend on those declarations
 
