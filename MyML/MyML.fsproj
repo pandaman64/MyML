@@ -63,6 +63,7 @@
     <Compile Include="Closure.fs" />
     <Compile Include="TypeInference.fs" />
     <Compile Include="CodeGen.fs" />
+    <Compile Include="Interpreter.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
