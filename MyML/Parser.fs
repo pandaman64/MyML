@@ -2,12 +2,18 @@
 
 open FParsec
 
+type Operator =   Add
+                | Subtract
+                | Multiply
+                | Divide
+
 type Expr =   Literal of int
             | Identifier of string
             | Let of string * string list * Expr * Expr
             | LetRec of string * string list * Expr * Expr
             | Apply of Expr * Expr list
             | If of Expr * Expr * Expr
+            | BinOp of Expr * Operator * Expr
 
 type Declaration = LetDecl of string * string list * Expr
                  | LetRecDecl of string * string list * Expr
@@ -85,12 +91,32 @@ let papplyOrValue:MLParser<Expr> = parse{
     | exprs -> return Apply(head,exprs) //あるときは適用して返す
 }
 
+let pbinop (pfactor: MLParser<Expr>) (ops: Map<char,Operator>):MLParser<Expr> = 
+    let pop = satisfy ops.ContainsKey
+              |>> ops.TryFind
+              |>> Option.get
+    let pterm = parse{ 
+        let! op = pop
+        return fun lhs rhs -> BinOp(lhs,op,rhs)
+    }
+    chainl1 pfactor pterm
+
+let pmultitive:MLParser<Expr> = 
+    [ '*',Multiply; '/',Divide ]
+    |> Map.ofList
+    |> pbinop papplyOrValue 
+
+let padditive:MLParser<Expr> =
+    [ '+',Add; '-',Subtract ]
+    |> Map.ofList
+    |> pbinop pmultitive
+
 pexprRef := spaces >>. choice [
     attempt pletrec;
     attempt plet;
     attempt pif;
     attempt pliteral;
-    papplyOrValue
+    padditive
 ] .>> spaces
 
 let pletDecl:MLParser<Declaration> = parse{

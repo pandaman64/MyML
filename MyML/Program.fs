@@ -8,7 +8,7 @@ let main argv =
         let const x =
             let f y = id x in
             f;
-        let succ x = plus x 1;
+        let succ x = x + 1;
         let rec infinite x = infinite (succ x);
         let sum min = 
             let helper max = 
