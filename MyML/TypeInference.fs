@@ -165,7 +165,7 @@ with
     member this.WithType (type_: Type): TypedExpr =
         {value = this; type_ = type_}
 
-type Function = {argument: Var; body: TypedExpr}
+type Function = {argument: Var list; body: TypedExpr}
 with
     member this.Apply subst: Function = 
         {argument = this.argument; body = this.body.Apply subst}
@@ -340,52 +340,74 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
         let (schemed: SchemedExpr) = {value = value.value; type_ = generalize (env.Apply s) value.type_} 
         s,FreeValue(name,schemed)
     | Closure.FreeFunction(name,f) ->
-        let argType = newTyVar "t"
-        let innerEnv = env.Add f.argument (Scheme.fromType argType)
+        let argTypes = List.map (fun _ -> newTyVar "t") f.argument
+        let innerEnv = List.zip f.argument argTypes
+                       |> Map.ofList
+                       |> Map.map (fun _ t -> Scheme.fromType t)
+                       |> TypeEnv
+                       |> env.Merge
         let s,body = inferExpr innerEnv f.body
         let thisScheme = 
-            let thisType = TArrow(argType.Apply s,body.type_.Apply s)
+            let thisType = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
+                           |> fun type_ -> type_.Apply s
             generalize (env.Apply s) thisType
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
         s,FreeFunction(name,value)
     | Closure.FreeRecFunction(name,f) ->
         let thisType = newTyVar "t"
-        let argType = newTyVar "t"
-        let innerEnv = 
-            let env = env.Add f.argument (Scheme.fromType argType)
+        let argTypes = List.map (fun _ -> newTyVar "t") f.argument
+        let innerEnv =
+            let env = List.zip f.argument argTypes
+                      |> Map.ofList
+                      |> Map.map (fun _ t -> Scheme.fromType t)
+                      |> TypeEnv
+                      |> env.Merge
             env.Add name (Scheme.fromType thisType)
         let s1,body = inferExpr innerEnv f.body
-        let s2 = unify (thisType.Apply s1) (TArrow(argType.Apply s1,body.type_.Apply s1))
+        let s2 = 
+            let thisType' = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
+                            |> fun type_ -> type_.Apply s1
+            unify (thisType.Apply s1) thisType'
         let s = composeSubstitution s1 s2
         let thisScheme = generalize (env.Apply s) (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}  
         s,FreeRecFunction(name,value)
     | Closure.ClosureDecl(Closure.Closure(name,f,capturedVariables)) ->
-        let argType = newTyVar "t"
+        let argTypes = List.map (fun _ -> newTyVar "t") f.argument
         let captured = capturedVariables
                        |> Set.map (fun v -> v,newTyVar "t")
                        |> Map.ofSeq
         let capturedEnv = Map.map (fun _ t -> Scheme.fromType t) captured
                           |> TypeEnv
-        let innerEnv = (env.Merge capturedEnv).Add f.argument (Scheme.fromType argType)
+        let innerEnv = 
+            let env = env.Merge capturedEnv
+            List.zip f.argument argTypes
+            |> Map.ofList
+            |> Map.map (fun _ t -> Scheme.fromType t)
+            |> TypeEnv
+            |> env.Merge
         let s,body = inferExpr innerEnv f.body
         let captured = captured
                        |> Map.map (fun _ t -> t.Apply s)
         let thisScheme = 
-            let thisType = TArrow(argType.Apply s,body.type_.Apply s)
-            
+            let thisType = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
+                           |> fun type_ -> type_.Apply s
             let closureType = TClosure(thisType.Apply s,captured)
             generalize (env.Apply s) closureType
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
         s,ClosureDecl(Closure(name,value,captured))
     | Closure.ClosureRecDecl(Closure.Closure(name,f,capturedVariables)) ->
         let thisType = newTyVar "t"
-        let argType = newTyVar "t"
+        let argTypes = List.map (fun _ -> newTyVar "t") f.argument
         let captured = capturedVariables
                        |> Set.map (fun v -> v,newTyVar "t")
                        |> Map.ofSeq
         let innerEnv = 
-            let env = env.Add f.argument (Scheme.fromType argType)
+            let env = List.zip f.argument argTypes
+                      |> Map.ofList
+                      |> Map.map (fun _ t -> Scheme.fromType t)
+                      |> TypeEnv
+                      |> env.Merge
             let env = env.Add name (Scheme.fromType thisType)
             let capturedEnv = Map.map (fun _ t -> Scheme.fromType t) captured
                               |> TypeEnv
@@ -394,7 +416,8 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
         let captured = captured
                        |> Map.map (fun _ t -> t.Apply s1)
         let closureType =
-            let thisType = TArrow(argType.Apply s1,body.type_.Apply s1)
+            let thisType = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
+                           |> fun type_ -> type_.Apply s1
             TClosure(thisType.Apply s1,captured)
         let s2 = unify thisType closureType
         let s = composeSubstitution s1 s2

@@ -20,6 +20,9 @@ let main argv =
                         plus x (loop (succ x)) in
                 loop min in
             helper;
+        let rec summ min max =
+            if eq min max then min
+            else plus min (summ (succ min) max);
         let main = sum 0 10;
         """
     printfn "%s" source
