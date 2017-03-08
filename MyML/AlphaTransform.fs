@@ -21,9 +21,6 @@ let newVar =
         Var(sprintf "%s@%d" name counter)
     impl
 
-let mergeMap from to_ =
-    Map.fold (fun t k v -> Map.add k v t) to_ from
-
 let rec alphaTransformExpr (env: Environment) (expr: Parser.Expr): Expr = 
     match expr with
     | Parser.Expr.Literal(x) -> Literal(x)
