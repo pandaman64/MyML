@@ -1,11 +1,7 @@
 ﻿module Parser
 
 open FParsec
-
-type Operator =   Add
-                | Subtract
-                | Multiply
-                | Divide
+open Common
 
 type Expr =   Literal of int
             | Identifier of string

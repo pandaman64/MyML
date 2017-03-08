@@ -137,9 +137,10 @@ type Expr =   Literal of int
             | ExternRef of Var
             | Alias of Var * TypedExpr * TypedExpr
             | AliasRec of Var * TypedExpr * TypedExpr
-            | Apply of TypedExpr * TypedExpr
+            | Apply of TypedExpr * TypedExpr list
             | ApplyClosure of TypedExpr * Map<Var,TypedExpr> 
             | If of TypedExpr * TypedExpr * TypedExpr
+            | BinOp of TypedExpr * Operator * TypedExpr
 with
     member this.Apply' subst: Expr =
         match this with
@@ -147,9 +148,10 @@ with
         | ExternRef(_) -> this
         | Alias(name,value,body) -> Alias(name,value.Apply subst,body.Apply subst)
         | AliasRec(name,value,body) -> AliasRec(name,value.Apply subst,body.Apply subst)
-        | Apply(f,x) -> Apply(f.Apply subst,x.Apply subst)
+        | Apply(f,xs) -> Apply(f.Apply subst,xs |> List.map (fun x -> x.Apply subst))
         | ApplyClosure(cls,applications) -> ApplyClosure(cls.Apply subst,applications)
         | If(cond,ifTrue,ifFalse) -> If(cond.Apply subst,ifTrue.Apply subst,ifFalse.Apply subst)
+        | BinOp(lhs,op,rhs) -> BinOp(lhs.Apply subst,op,rhs.Apply subst)
 and
     [<StructuredFormatDisplayAttribute("{AsString}")>]
     TypedExpr = {value: Expr; type_: Type}
@@ -236,6 +238,7 @@ with
             sprintf "[%A %s]" f applicationString
         | If(cond,ifTrue,ifFalse) ->
             sprintf "if %A then %A else %A" cond ifTrue ifFalse
+        | BinOp(lhs,op,rhs) -> sprintf "(%A %A %A)" lhs op rhs
 
 type TypedExpr
 with
@@ -282,12 +285,22 @@ let rec inferExpr (env: TypeEnv) (expr: Closure.Expr): Substitution * TypedExpr 
             emptySubstitution,expr.WithType (newTyVar "t")
         | Some(scheme) ->
             emptySubstitution,expr.WithType (instantiate scheme)
-    | Closure.Apply(f,x) ->
+    | Closure.Apply(f,xs) ->
         let sf,f = inferExpr env f
-        let sx,x = inferExpr (env.Apply sf) x
+        let sx,xs = 
+            xs
+            |> List.map (fun x -> inferExpr (env.Apply sf) x)
+            |> List.unzip
+        let subst = composeSubstitutionMany (sf :: sx)
         let t = newTyVar "t"
-        let subst = unify (f.type_.Apply sx) (TArrow(x.type_,t))
-        composeSubstitutionMany [sf; sx; subst],Apply(f.Apply subst,x.Apply subst).WithType (t.Apply subst)
+        let subst' = 
+            let funType = 
+                let xsType = xs
+                             |> List.map (fun x -> x.type_)
+                List.foldBack (fun (xType: Type) funType -> TArrow(xType.Apply subst,funType)) xsType (t.Apply subst)
+            unify (f.type_.Apply subst) funType
+        let subst = composeSubstitution subst subst'
+        subst,Apply(f.Apply subst,xs |> List.map (fun x -> x.Apply subst)).WithType (t.Apply subst)
     | Closure.If(cond,ifTrue,ifFalse) ->
         let sc,cond = inferExpr env cond
         let sc2 = unify cond.type_ boolType
@@ -302,6 +315,20 @@ let rec inferExpr (env: TypeEnv) (expr: Closure.Expr): Substitution * TypedExpr 
         let ifTrue = ifTrue.Apply subst
         let ifFalse = ifFalse.Apply subst
         subst,If(cond,ifTrue,ifFalse).WithType (ifTrue.type_.Apply subst)
+    | Closure.BinOp(lhs,op,rhs) ->
+        let opType =
+            let op = Var(sprintf "%A" op)
+            let (TypeEnv(env)) = env
+            match Map.tryFind op env with
+            | None -> failwithf "operator %A not found" op
+            | Some(decl) -> instantiate decl
+        let slhs,lhs = inferExpr env lhs
+        let srhs,rhs = inferExpr (env.Apply slhs) rhs
+        let subst = composeSubstitution slhs srhs
+        let retType = newTyVar "t"
+        let sop = unify opType (TArrow(lhs.type_.Apply subst,TArrow(rhs.type_.Apply subst,retType)))
+        let subst = composeSubstitution subst sop
+        subst,BinOp(lhs.Apply subst,op,rhs.Apply subst).WithType (retType.Apply subst)
     | Closure.Alias(name,value,body) ->
         let sv,value = inferExpr env value
         let env = (env.Apply sv).Add name (generalize (env.Apply sv) value.type_)

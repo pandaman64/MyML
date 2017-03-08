@@ -6,8 +6,9 @@ type Expr =   Literal of int
             | VarRef of Var
             | Let of Var * Var list * Expr * Expr
             | LetRec of Var * Var list * Expr * Expr
-            | Apply of Expr * Expr
+            | Apply of Expr * Expr list
             | If of Expr * Expr * Expr
+            | BinOp of Expr * Operator * Expr
 
 type Declaration =   LetDecl of Var * Var list * Expr
                    | LetRecDecl of Var * Var list * Expr
@@ -26,8 +27,7 @@ let rec alphaTransformExpr (env: Environment) (expr: Parser.Expr): Expr =
     | Parser.Expr.Literal(x) -> Literal(x)
     | Parser.Expr.If(cond,ifTrue,ifFalse) -> 
         If(alphaTransformExpr env cond,alphaTransformExpr env ifTrue,alphaTransformExpr env ifFalse)
-    | Parser.Expr.Apply(f,xs) -> //currying
-        List.fold (fun f x -> Apply(f,alphaTransformExpr env x)) (alphaTransformExpr env f) xs
+    | Parser.Expr.Apply(f,xs) -> Apply(alphaTransformExpr env f,List.map (alphaTransformExpr env) xs)
     | Parser.Expr.Let(name,argument,value,body) -> 
         let argumentVars = List.map newVar argument
         let value = 
@@ -62,6 +62,7 @@ let rec alphaTransformExpr (env: Environment) (expr: Parser.Expr): Expr =
             failwithf "variable '%s' not found in %A" name env 
             //VarRef(newVar (sprintf "%s_notfound" name))
         | Some(expr) -> expr
+    | Parser.Expr.BinOp(lhs,op,rhs) -> BinOp(alphaTransformExpr env lhs,op,alphaTransformExpr env rhs)
 
 let alphaTransformDecl (env: Environment) (expr: Parser.Declaration): Declaration =
     match expr with

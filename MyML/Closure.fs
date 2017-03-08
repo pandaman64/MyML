@@ -15,8 +15,11 @@ with
         | AlphaTransform.Expr.VarRef(x) -> Set.singleton x
         | AlphaTransform.Expr.If(cond,ifTrue,ifFalse) ->
             Set.unionMany [cond.freeVariables; ifTrue.freeVariables; ifFalse.freeVariables]
-        | AlphaTransform.Expr.Apply(f,x) ->
-            Set.union f.freeVariables x.freeVariables
+        | AlphaTransform.Expr.Apply(f,xs) ->
+            xs
+            |> List.map (fun x -> x.freeVariables)
+            |> cons f.freeVariables
+            |> Set.unionMany
         | AlphaTransform.Expr.Let(name,argument,value,body) ->
             let argument = Set.ofList argument
             let value = value.freeVariables - argument
@@ -27,6 +30,8 @@ with
             let value = value.freeVariables - argument
             let body = body.freeVariables
             Set.union value body - Set.singleton name
+        | AlphaTransform.Expr.BinOp(lhs,_,rhs) ->
+            Set.union lhs.freeVariables rhs.freeVariables
 
 // name * body * captured variables
 type Closure = Closure of Var * Function * Set<Var>
@@ -40,9 +45,10 @@ and
            | ExternRef of Var
            | Alias of Var * Expr * Expr
            | AliasRec of Var * Expr * Expr
-           | Apply of Expr * Expr
+           | Apply of Expr * Expr list
            | ApplyClosure of Expr * Map<Var,Expr> 
            | If of Expr * Expr * Expr
+           | BinOp of Expr * Operator * Expr
     with
         member this.freeVariables (locals: Map<Var,Declaration>): Set<Var> = 
             match this with
@@ -55,7 +61,11 @@ and
                 Set.union (value.freeVariables locals) (body.freeVariables locals) - Set.singleton v
             | AliasRec(v,value,body) ->
                 Set.union (value.freeVariables locals) (body.freeVariables locals) - Set.singleton v
-            | Apply(f,x) -> Set.union (f.freeVariables locals) (x.freeVariables locals)
+            | Apply(f,xs) -> 
+                xs
+                |> List.map (fun x -> x.freeVariables locals)
+                |> cons (f.freeVariables locals)
+                |> Set.unionMany
             | ApplyClosure(closure,application) ->
                 let keys = Map.toSeq application
                            |> Seq.map fst
@@ -65,6 +75,8 @@ and
                 [cond; ifTrue; ifFalse]
                 |> List.map (fun x -> x.freeVariables locals)
                 |> Set.unionMany 
+            | BinOp(lhs,_,rhs) ->
+                Set.union (lhs.freeVariables locals) (rhs.freeVariables locals)
         override this.ToString() =
             match this with
             | Literal(x) -> sprintf "%d" x
@@ -83,6 +95,7 @@ and
                 sprintf "[%A {%s}]" cls applicationString
             | If(cond,ifTrue,ifFalse) ->
                 sprintf "if %A then %A else %A" cond ifTrue ifFalse
+            | BinOp(lhs,op,rhs) -> sprintf "(%A %A %A)" lhs op rhs
         member this.AsString = this.ToString()
 and
     Function = {argument: Var list; body: Expr}
@@ -177,10 +190,15 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
         let declTrue,ifTrue = extractDeclarations externs locals ifTrue
         let declFalse,ifFalse = extractDeclarations externs locals ifFalse
         List.concat [declCond; declTrue; declFalse],If(cond,ifTrue,ifFalse)
-    | AlphaTransform.Expr.Apply(f,x) ->
+    | AlphaTransform.Expr.BinOp(lhs,op,rhs) -> 
+        let declLhs,lhs = extractDeclarations externs locals lhs
+        let declRhs,rhs = extractDeclarations externs locals rhs
+        List.append declLhs declRhs,BinOp(lhs,op,rhs)
+    | AlphaTransform.Expr.Apply(f,xs) ->
         let declF,f = extractDeclarations externs locals f
-        let declX,x = extractDeclarations externs locals x
-        List.append declF declX,Apply(f,x)
+        let declX,xs = List.map (extractDeclarations externs locals) xs
+                       |> List.unzip 
+        List.concat (declF :: declX),Apply(f,xs)
     | AlphaTransform.Expr.Let(name,argument,value,body) ->
         let declValue,value = 
             let locals = addArgumentToEnvironment argument locals
