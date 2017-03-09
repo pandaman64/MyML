@@ -4,26 +4,8 @@ open Common
 [<EntryPoint>]
 let main argv = 
     let source = """
-        let id x = x;
-        let const x =
-            let f y = id x in
-            f;
         let succ x = x + 1;
-        let rec infinite x = infinite (succ x);
-        let sum min = 
-            let helper max = 
-                let rec loop x =
-                    if (eq x max)
-                    then
-                        x
-                    else
-                        plus x (loop (succ x)) in
-                loop min in
-            helper;
-        let rec summ min max =
-            if eq min max then min
-            else plus min (summ (succ min) max);
-        let main = sum 0 10;
+        let main = succ 0;
         """
     printfn "%s" source
     match run Parser.pprogram source with
@@ -53,5 +35,8 @@ let main argv =
         printfn "type inferred declarations:"
         for decl in inferredDecls do
             printfn "  %A" decl
+        let info = new CodeGen.AssemblyInformation()
+        let assembly = info.generateDecls inferredDecls
+        printfn "%s" (CodeGen.assemblyString assembly)
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code

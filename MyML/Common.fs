@@ -1,6 +1,11 @@
 ﻿module Common
 
+[<StructuredFormatDisplayAttribute("{AsString}")>]
 type Var = Var of string
+with
+    member this.AsString =
+        let (Var(name)) = this
+        name
 
 [<StructuredFormatDisplayAttribute("{AsString}")>]
 type Operator =   Add
