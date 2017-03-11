@@ -5,7 +5,10 @@ open Common
 let main argv = 
     let source = """
         let succ x = x + 1;
-        let main = succ 0;
+        let zero = 0;
+        let eqq x y = 1;
+        let rec sum x = x + sum (x - 1);
+        let main = sum 0;
         """
     printfn "%s" source
     match run Parser.pprogram source with
@@ -26,7 +29,8 @@ let main argv =
                 Var("plus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
                 Var("minus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
                 Var("eq"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType));
-                Var("+"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType))
+                Var("+"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
+                Var("-"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
             ]
             |> Map.ofSeq
             |> Map.map (fun _ t -> TypeInference.Scheme.fromType t)

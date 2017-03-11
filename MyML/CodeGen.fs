@@ -170,6 +170,11 @@ type AssemblyInformation() =
                                             then sprintf "%A" name 
                                             else sprintf "%A_%A" name substString
                             newLabel labelName
+                        
+                        // register a stub for recursive call
+                        let instances = Map.add type_ (entryPoint,[]) instances
+                        declarations <- Map.add name (decl,instances) declarations
+
                         this.Push
                         this.MarkLabel entryPoint
                         for arg in value.argument do
@@ -177,6 +182,8 @@ type AssemblyInformation() =
                         this.generateExpr value.body arguments locals
                         this.Emit None Ret
                         let assembly = this.Pop
+
+                        // re-register the content
                         let instances = Map.add type_ (entryPoint,assembly) instances
                         declarations <- Map.add name (decl,instances) declarations
                         entryPoint
