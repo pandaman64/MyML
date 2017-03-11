@@ -45,6 +45,12 @@ type OpCode =   Nop
               | Subtract
               | Multiply
               | Divide
+              | Equal
+              | NotEqual
+              | LessThan
+              | LessThanOrEq
+              | GreaterThan
+              | GreaterThanOrEq
               | LdLoc of Var
               | StLoc of Var
               | LdArg of Var
@@ -67,6 +73,12 @@ with
         | Subtract -> "SUB" 
         | Multiply -> "MUL"
         | Divide -> "DIV"
+        | Equal -> "EQ"
+        | NotEqual -> "NEQ"
+        | LessThan -> "LESS"
+        | LessThanOrEq -> "LEQ"
+        | GreaterThan -> "GREATER"
+        | GreaterThanOrEq -> "GEQ"
         | Push(x) -> sprintf "PUSH  %d" x
         | Pop -> "POP"
         | Call -> "CALL"
@@ -200,6 +212,12 @@ type AssemblyInformation() =
                             | Operator.Subtract -> Subtract
                             | Operator.Multiply -> Multiply
                             | Operator.Divide -> Divide
+                            | Operator.Equal -> Equal
+                            | Operator.NotEqual -> NotEqual
+                            | Operator.LessThan -> LessThan
+                            | Operator.LessThanOrEq -> LessThanOrEq
+                            | Operator.GreaterThan -> GreaterThan
+                            | Operator.GreaterThanOrEq -> GreaterThanOrEq
                 info.Emit None op
             | TI.Apply(f,xs) ->
                 for x in List.rev xs do
@@ -223,19 +241,19 @@ type AssemblyInformation() =
                 // generate like below codes
                 //
                 // 'cond'
-                // BTrue IFFALSE
-                // 'ifTrue'
+                // BTrue IFTRUE
+                // 'ifFalse'
                 // Jmp IFEND
-                // IFFALSE: 'ifFalse'
+                // IFFALSE: 'ifTrue'
                 // IFEND:
                 info.generateExpr cond arguments locals
-                let falseLabel = newLabel "IFFALSE"
-                info.Emit None (BTrue(falseLabel)) 
-                info.generateExpr ifTrue arguments locals
+                let trueLabel = newLabel "IFTRUE"
+                info.Emit None (BTrue(trueLabel)) 
+                info.generateExpr ifFalse arguments locals
                 let endLabel = newLabel "IFEND"
                 info.Emit None (Jmp(endLabel))
-                info.MarkLabel falseLabel
-                info.generateExpr ifFalse arguments locals
+                info.MarkLabel trueLabel
+                info.generateExpr ifTrue arguments locals
                 info.MarkLabel endLabel
             | TI.ExternRef(name) ->
                 if Set.contains name arguments
@@ -246,6 +264,13 @@ type AssemblyInformation() =
                     info.Emit None (LdLoc(name))
                 else 
                     info.Emit None (Label(info.instantiate name expr.type_))
+                    match declarations.TryFind name with
+                    | None -> failwith "?"
+                    | Some(TI.FreeValue(_,_),_) -> 
+                        // if referencing a value(not function),
+                        // immediately evaluate it by calling
+                        info.Emit None Call
+                    | _ -> ignore "functions"
 
         member this.generateDecls (decls: TI.Declaration list):Assembly = 
             this.Push

@@ -3,7 +3,7 @@
 open FParsec
 open Common
 
-type Expr =   Literal of int
+type Expr =   IntegerLiteral of int
             | Identifier of string
             | Let of string * string list * Expr * Expr
             | LetRec of string * string list * Expr * Expr
@@ -18,7 +18,7 @@ type MLParser<'a> = Parser<'a,unit>
 
 let pexpr,pexprRef = createParserForwardedToRef<Expr,unit>()
 
-let pliteral:MLParser<Expr> = pint32 .>> spaces |>> Literal
+let pliteral:MLParser<Expr> = pint32 .>> spaces |>> IntegerLiteral
 
 let pidentifierString:MLParser<string> = 
     let palphabet = satisfy isLetter
@@ -87,10 +87,10 @@ let papplyOrValue:MLParser<Expr> = parse{
     | exprs -> return Apply(head,exprs) //あるときは適用して返す
 }
 
-let pbinop (pfactor: MLParser<Expr>) (ops: Map<char,Operator>):MLParser<Expr> = 
-    let pop = satisfy ops.ContainsKey
-              |>> ops.TryFind
-              |>> Option.get
+let pbinop (pfactor: MLParser<Expr>) (ops: (string * Operator) list):MLParser<Expr> = 
+    let pop = ops
+              |> List.map (fun (op,value) -> attempt (pstring op >>% value))
+              |> choice
     let pterm = parse{ 
         let! op = pop
         return fun lhs rhs -> BinOp(lhs,op,rhs)
@@ -98,21 +98,30 @@ let pbinop (pfactor: MLParser<Expr>) (ops: Map<char,Operator>):MLParser<Expr> =
     chainl1 pfactor pterm
 
 let pmultitive:MLParser<Expr> = 
-    [ '*',Multiply; '/',Divide ]
-    |> Map.ofList
+    [ "*",Multiply; "/",Divide ]
     |> pbinop papplyOrValue 
 
 let padditive:MLParser<Expr> =
-    [ '+',Add; '-',Subtract ]
-    |> Map.ofList
+    [ "+",Add; "-",Subtract ]
     |> pbinop pmultitive
+
+let prelational: MLParser<Expr> =
+    [
+        "=",Equal;
+        "!=",NotEqual;
+        "<=",LessThanOrEq;
+        "<",LessThan;
+        ">=",GreaterThanOrEq;
+        ">",GreaterThan;
+    ]
+    |> pbinop padditive
 
 pexprRef := spaces >>. choice [
     attempt pletrec;
     attempt plet;
     attempt pif;
     attempt pliteral;
-    padditive
+    prelational
 ] .>> spaces
 
 let pletDecl:MLParser<Declaration> = parse{

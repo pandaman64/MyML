@@ -24,7 +24,7 @@ let newVar =
 
 let rec alphaTransformExpr (env: Environment) (expr: Parser.Expr): Expr = 
     match expr with
-    | Parser.Expr.Literal(x) -> Literal(x)
+    | Parser.Expr.IntegerLiteral(x) -> Literal(x)
     | Parser.Expr.If(cond,ifTrue,ifFalse) -> 
         If(alphaTransformExpr env cond,alphaTransformExpr env ifTrue,alphaTransformExpr env ifFalse)
     | Parser.Expr.Apply(f,xs) -> Apply(alphaTransformExpr env f,List.map (alphaTransformExpr env) xs)

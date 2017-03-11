@@ -7,8 +7,8 @@ let main argv =
         let succ x = x + 1;
         let zero = 0;
         let eqq x y = 1;
-        let rec sum x = x + sum (x - 1);
-        let main = sum 0;
+        let rec sum x = if x = 0 then 0 else x + sum (x - 1);
+        let main = sum zero;
         """
     printfn "%s" source
     match run Parser.pprogram source with
@@ -18,19 +18,24 @@ let main argv =
             TypeEnv(env)
         let result = inferDeclarations env decls
         printfn "%A" result*)
-        let decls = AlphaTransform.alphaTransformDecls (Set.ofList ["plus"; "eq"; "minus"]) decls
+        let decls = AlphaTransform.alphaTransformDecls (Set.ofList []) decls
         //printfn "declarations: %A" decls
-        let extractedDecls = Closure.transformDecls [Var("plus"); Var("eq"); Var("eq")] decls
+        let extractedDecls = Closure.transformDecls [] decls
         printfn "closure transformed declarations:"
         for decl in extractedDecls do
             printfn "  %A" decl
         let typeEnv = 
             [
-                Var("plus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
-                Var("minus"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
-                Var("eq"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType));
                 Var("+"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
                 Var("-"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
+                Var("*"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
+                Var("/"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.intType));
+                Var("="),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType));
+                Var("!="),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType));
+                Var("<"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType));
+                Var("<="),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType));
+                Var(">"),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType));
+                Var(">="),TypeInference.TArrow(TypeInference.intType,TypeInference.TArrow(TypeInference.intType,TypeInference.boolType));
             ]
             |> Map.ofSeq
             |> Map.map (fun _ t -> TypeInference.Scheme.fromType t)

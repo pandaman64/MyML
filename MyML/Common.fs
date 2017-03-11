@@ -12,6 +12,12 @@ type Operator =   Add
                 | Subtract
                 | Multiply
                 | Divide
+                | Equal
+                | NotEqual
+                | LessThan
+                | LessThanOrEq
+                | GreaterThan
+                | GreaterThanOrEq
 with
     member this.AsString =
         match this with
@@ -19,6 +25,12 @@ with
         | Subtract -> "-"
         | Multiply -> "*"
         | Divide -> "/"
+        | Equal -> "="
+        | NotEqual -> "!="
+        | LessThan -> "<"
+        | LessThanOrEq -> "<="
+        | GreaterThan -> ">"
+        | GreaterThanOrEq -> ">="
 
 let mergeMap from to_ =
     Map.fold (fun t k v -> Map.add k v t) to_ from
