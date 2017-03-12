@@ -100,12 +100,16 @@ and
 and
     Function = {argument: Var list; body: Expr}
 and
+    TypeDecl =   Record of Map<Var,Var>
+               | TyAlias of Var
+and
     [<StructuredFormatDisplayAttribute("{AsString}")>]
     Declaration =    FreeValue of Var * Expr
                    | FreeFunction of Var * Function
                    | FreeRecFunction of Var * Function
                    | ClosureDecl of Closure
                    | ClosureRecDecl of Closure
+                   | TypeDecl of Var * TypeDecl
     with
         member this.Name: Var = 
             match this with
@@ -114,6 +118,7 @@ and
             | FreeRecFunction(name,_) -> name
             | ClosureDecl(cls) -> cls.Name
             | ClosureRecDecl(cls) -> cls.Name
+            | TypeDecl(name,_) -> name
         override this.ToString() =
             match this with
             | FreeValue(Var(name),expr) -> sprintf "value %s = %A" name expr
@@ -125,6 +130,8 @@ and
                 sprintf "closure %s %A {%s} = %A" name argument (freeVariablesString freeVariables) body
             | ClosureRecDecl(Closure(Var(name),{argument = argument; body = body},freeVariables)) ->
                 sprintf "closure rec %s %A {%s} = %A" name argument (freeVariablesString freeVariables) body
+            | TypeDecl(Var(name),decl) ->
+                sprintf "type %s = %A" name decl
         member this.AsString = this.ToString()
 
 let newVar =
@@ -312,6 +319,11 @@ let transformDecl (externs: Map<Var,Declaration>) (decl: AlphaTransform.Declarat
                 FreeRecFunction(name,{argument = argument; body = expr})
         decl :: decls
         |> List.rev // extracted declarations must come first because the body of 'decl' may depend on those declarations
+    | AlphaTransform.Declaration.TypeDecl(name,decl) ->
+        let decl = match decl with
+                   | AlphaTransform.TyAlias(alias) -> TyAlias(alias)
+                   | AlphaTransform.Record(fields) -> Record(fields)
+        [TypeDecl(name,decl)]
 
 let transformDecls (externs: Var seq) (decls: AlphaTransform.Declaration seq): Declaration list =
     let externs = 

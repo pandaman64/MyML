@@ -11,8 +11,12 @@ type Expr =   IntegerLiteral of int
             | If of Expr * Expr * Expr
             | BinOp of Expr * Operator * Expr
 
+type TypeDecl =   Record of Map<string,string>
+                | TyAlias of string
+
 type Declaration = LetDecl of string * string list * Expr
                  | LetRecDecl of string * string list * Expr
+                 | TypeDecl of string * TypeDecl
 
 type MLParser<'a> = Parser<'a,unit>
 
@@ -25,7 +29,7 @@ let pidentifierString:MLParser<string> =
     let pfollowing = 
         let pred c = isLetter c || isDigit c || isAnyOf "!?" c
         satisfy pred
-    let reservedWords = ["if";"then";"else";"in";"let"]
+    let reservedWords = ["if";"then";"else";"in";"let";"type"]
     let parser = parse{
         let! id = many1Chars2 palphabet pfollowing .>> spaces
         if List.contains id reservedWords then 
@@ -142,8 +146,34 @@ let pletrecDecl:MLParser<Declaration> = parse{
     return LetRecDecl(name,parameters,bind)
 }
 
+let precordDecl:MLParser<TypeDecl> = parse{
+    do! pchar '{' >>. spaces
+    let! content = 
+        let pfield = pidentifierString .>>. (pchar ':' >>. spaces >>. pidentifierString)
+        sepBy pfield (pchar ';' >>. spaces)
+        |>> Map.ofList
+    do! attempt (pchar ';' >>. spaces)
+    do! pchar '}' >>. spaces
+    return Record(content)
+}
+
+let ptypeDecl:MLParser<Declaration> = parse{
+    do! pstring "type" >>. spaces
+    let! name = pidentifierString
+    do! pchar '=' >>. spaces
+    let! decl = choice [
+                    precordDecl;
+                    pidentifierString |>> TyAlias
+                ]
+    return TypeDecl(name,decl)
+}
+
 let pdecls = 
-    let pdeclOne = pletrecDecl <|> pletDecl
+    let pdeclOne = choice [
+                          pletrecDecl;
+                          pletDecl;
+                          ptypeDecl
+                          ] 
     spaces >>. many pdeclOne
 
 let pprogram = pdecls

@@ -10,8 +10,12 @@ type Expr =   Literal of int
             | If of Expr * Expr * Expr
             | BinOp of Expr * Operator * Expr
 
+type TypeDecl =   Record of Map<Var,Var>
+                | TyAlias of Var
+
 type Declaration =   LetDecl of Var * Var list * Expr
                    | LetRecDecl of Var * Var list * Expr
+                   | TypeDecl of Var * TypeDecl
 
 type Environment = Map<Var,Expr>
 
@@ -87,6 +91,14 @@ let alphaTransformDecl (env: Environment) (expr: Parser.Declaration): Declaratio
             mergeMap newEnv env
         let value = alphaTransformExpr env value
         LetRecDecl(thisVar,argumentVars,value)
+    | Parser.Declaration.TypeDecl(name,decl) ->
+        let decl = match decl with
+                   | Parser.TyAlias(alias) -> TyAlias(Var(alias))
+                   | Parser.Record(fields) -> Map.toSeq fields
+                                              |> Seq.map (fun (x,y) -> Var(x),Var(y))
+                                              |> Map.ofSeq
+                                              |> Record
+        TypeDecl(Var(name),decl)
 
 let alphaTransformDecls externs decls =
     let env = 
@@ -97,6 +109,7 @@ let alphaTransformDecls externs decls =
             match decl with
             | Parser.Declaration.LetDecl(name,_,_) -> Var(name)
             | Parser.Declaration.LetRecDecl(name,_,_) -> Var(name)
+            | Parser.Declaration.TypeDecl(name,_) -> Var(name)
         let decl = alphaTransformDecl env decl
         (Map.add declVar (VarRef(declVar)) env,decl :: decls)
     let _,decls = List.fold impl (env,[]) decls
