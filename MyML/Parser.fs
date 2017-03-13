@@ -10,6 +10,8 @@ type Expr =   IntegerLiteral of int
             | Apply of Expr * Expr list
             | If of Expr * Expr * Expr
             | BinOp of Expr * Operator * Expr
+            | RecordLiteral of Map<string,Expr>
+            | RecordAccess of Expr * string
 
 type TypeDecl =   Record of Map<string,string>
                 | TyAlias of string
@@ -84,8 +86,18 @@ let pvalue:MLParser<Expr> =
     let braced = between (pchar '(' >>. spaces) (pchar ')' >>. spaces) pexpr
     braced <|> pprimitive
 
-let papplyOrValue:MLParser<Expr> = parse{
-    let! head,tail = pvalue .>>. (many pvalue)
+let precordAccess: MLParser<Expr> = parse{
+    let! obj = pvalue
+    let! dot = opt (pchar '.' >>. spaces)
+    match dot with
+    | None -> return obj
+    | Some(_) -> 
+        let! field = pidentifierString
+        return RecordAccess(obj,field)
+}
+
+let papply:MLParser<Expr> = parse{
+    let! head,tail = precordAccess .>>. (many precordAccess)
     match tail with
     | [] -> return head //引数がないときはそのまま返す
     | exprs -> return Apply(head,exprs) //あるときは適用して返す
@@ -103,7 +115,7 @@ let pbinop (pfactor: MLParser<Expr>) (ops: (string * Operator) list):MLParser<Ex
 
 let pmultitive:MLParser<Expr> = 
     [ "*",Multiply; "/",Divide ]
-    |> pbinop papplyOrValue 
+    |> pbinop papply 
 
 let padditive:MLParser<Expr> =
     [ "+",Add; "-",Subtract ]
@@ -120,11 +132,20 @@ let prelational: MLParser<Expr> =
     ]
     |> pbinop padditive
 
+let precordLiteral: MLParser<Expr> = parse{
+    do! pchar '{' >>. spaces
+    let pfield = pidentifierString .>>. (pchar '=' >>. spaces >>. pexpr)
+    let! content = sepBy pfield (pchar '=' >>. spaces) 
+    do! pchar '}' >>. spaces
+    return RecordLiteral(Map.ofList content)
+}
+
 pexprRef := spaces >>. choice [
     attempt pletrec;
     attempt plet;
     attempt pif;
     attempt pliteral;
+    attempt precordLiteral;
     prelational
 ] .>> spaces
 
