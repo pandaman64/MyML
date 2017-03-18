@@ -12,6 +12,7 @@ let rec isVariadic (type_: TI.Type): bool =
     | TI.TClosure(t,applications) ->
         isVariadic t || applications
                         |> Map.exists (fun _ t -> isVariadic t)
+    | TI.TRecord(TI.RecordType(fields)) -> Map.exists (fun _ t -> isVariadic t) fields
 
 [<StructuredFormatDisplayAttribute("{AsString}")>]
 type Label = { name: string; id: int list }

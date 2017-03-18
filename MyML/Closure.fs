@@ -32,6 +32,12 @@ with
             Set.union value body - Set.singleton name
         | AlphaTransform.Expr.BinOp(lhs,_,rhs) ->
             Set.union lhs.freeVariables rhs.freeVariables
+        | AlphaTransform.Expr.RecordLiteral(fields) ->
+            Map.toSeq fields
+            |> Seq.map snd
+            |> Seq.map (fun expr -> expr.freeVariables)
+            |> Set.unionMany
+        | AlphaTransform.Expr.RecordAccess(obj,_) -> obj.freeVariables
 
 // name * body * captured variables
 type Closure = Closure of Var * Function * Set<Var>
@@ -49,6 +55,8 @@ and
            | ApplyClosure of Expr * Map<Var,Expr> 
            | If of Expr * Expr * Expr
            | BinOp of Expr * Operator * Expr
+           | RecordLiteral of Map<Var,Expr>
+           | RecordAccess of Expr * Var
     with
         member this.freeVariables (locals: Map<Var,Declaration>): Set<Var> = 
             match this with
@@ -77,6 +85,13 @@ and
                 |> Set.unionMany 
             | BinOp(lhs,_,rhs) ->
                 Set.union (lhs.freeVariables locals) (rhs.freeVariables locals)
+            | RecordLiteral(fields) ->
+                fields
+                |> Map.toSeq
+                |> Seq.map snd
+                |> Seq.map (fun expr -> expr.freeVariables locals)
+                |> Set.unionMany
+            | RecordAccess(obj,_) -> obj.freeVariables locals
         override this.ToString() =
             match this with
             | Literal(x) -> sprintf "%d" x
@@ -96,6 +111,13 @@ and
             | If(cond,ifTrue,ifFalse) ->
                 sprintf "if %A then %A else %A" cond ifTrue ifFalse
             | BinOp(lhs,op,rhs) -> sprintf "(%A %A %A)" lhs op rhs
+            | RecordLiteral(fields) ->
+                let fieldsString = fields
+                                   |> Map.toSeq
+                                   |> Seq.map (fun (Var(name),value) -> sprintf "%s = %A" name value)
+                                   |> String.concat "; "
+                sprintf "{ %s }" fieldsString
+            | RecordAccess(obj,Var(field)) -> sprintf "(%A).%s" obj field
         member this.AsString = this.ToString()
 and
     Function = {argument: Var list; body: Expr}
@@ -287,6 +309,15 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
         | None ->
             printfn "%A not found in the scope" name 
             List.empty,ExternRef(name)
+    | AlphaTransform.Expr.RecordLiteral(fields) -> 
+        fields
+        |> Map.toSeq
+        |> Seq.map (fun (name,expr) -> name,extractDeclarations externs locals expr)
+        |> Seq.fold (fun (decls,fields) (name,(decls',expr)) -> (List.append decls decls',Map.add name expr fields)) ([],Map.empty)
+        |> fun (decls,fields) -> decls,RecordLiteral(fields)
+    | AlphaTransform.Expr.RecordAccess(obj,field) -> 
+        let decls,obj = extractDeclarations externs locals obj
+        decls,RecordAccess(obj,field)
 
 let transformDecl (externs: Map<Var,Declaration>) (decl: AlphaTransform.Declaration): Declaration list =
     match decl with

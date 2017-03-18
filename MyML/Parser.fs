@@ -171,9 +171,8 @@ let precordDecl:MLParser<TypeDecl> = parse{
     do! pchar '{' >>. spaces
     let! content = 
         let pfield = pidentifierString .>>. (pchar ':' >>. spaces >>. pidentifierString)
-        sepBy pfield (pchar ';' >>. spaces)
+        sepEndBy1 pfield (pchar ';' >>. spaces)
         |>> Map.ofList
-    do! attempt (pchar ';' >>. spaces)
     do! pchar '}' >>. spaces
     return Record(content)
 }
@@ -186,6 +185,7 @@ let ptypeDecl:MLParser<Declaration> = parse{
                     precordDecl;
                     pidentifierString |>> TyAlias
                 ]
+    do! pchar ';' >>. spaces
     return TypeDecl(name,decl)
 }
 

@@ -1,14 +1,18 @@
 ﻿module TypeInference
 
 open Common
+open Either
 
 type TyVar = TyVar of string
 
-[<StructuredFormatDisplayAttribute("{AsString}")>]
-type Type =   TConstructor of Var
+type RecordType = RecordType of Map<Var,Type>
+and
+    [<StructuredFormatDisplayAttribute("{AsString}")>]
+    Type =   TConstructor of Var
             | TVariable of TyVar
             | TArrow of Type * Type
             | TClosure of Type * Map<Var,Type>
+            | TRecord of RecordType
 with
     member this.freeTypeVariables =
         match this with
@@ -21,6 +25,11 @@ with
             |> Seq.map snd
             |> Seq.map (fun t -> t.freeTypeVariables)
             |> Seq.append [t.freeTypeVariables]
+            |> Set.unionMany
+        | TRecord(RecordType(fields)) ->
+            Map.toSeq fields
+            |> Seq.map snd
+            |> Seq.map (fun type_ -> type_.freeTypeVariables)
             |> Set.unionMany
     member this.Apply subst =
         match this with
@@ -35,6 +44,11 @@ with
                       |> Map.map (fun _ t -> t.Apply subst)
             TClosure(t,env)
         | TConstructor(_) -> this
+        | TRecord(RecordType(fields)) ->
+            fields
+            |> Map.map (fun _ type_ -> type_.Apply subst)
+            |> RecordType
+            |> TRecord
 
 let intType = TConstructor(Var("Int"))
 let boolType = TConstructor(Var("Bool"))
@@ -141,6 +155,8 @@ type Expr =   Literal of int
             | ApplyClosure of TypedExpr * Map<Var,TypedExpr> 
             | If of TypedExpr * TypedExpr * TypedExpr
             | BinOp of TypedExpr * Operator * TypedExpr
+            | RecordLiteral of Map<Var,TypedExpr>
+            | RecordAccess of TypedExpr * Var
 with
     member this.Apply' subst: Expr =
         match this with
@@ -152,6 +168,11 @@ with
         | ApplyClosure(cls,applications) -> ApplyClosure(cls.Apply subst,applications)
         | If(cond,ifTrue,ifFalse) -> If(cond.Apply subst,ifTrue.Apply subst,ifFalse.Apply subst)
         | BinOp(lhs,op,rhs) -> BinOp(lhs.Apply subst,op,rhs.Apply subst)
+        | RecordLiteral(fields) ->
+            fields
+            |> Map.map (fun _ expr -> expr.Apply subst)
+            |> RecordLiteral
+        | RecordAccess(expr,name) -> RecordAccess(expr.Apply subst,name)
 and
     [<StructuredFormatDisplayAttribute("{AsString}")>]
     TypedExpr = {value: Expr; type_: Type}
@@ -174,12 +195,16 @@ with
 type TypedFunction = {value: Function; type_: Scheme}
 type TypedClosure = Closure of Var * TypedFunction * Map<Var,Type>
 
+type TypeDecl =   Record of Map<Var,Type>
+                | TyAlias of Type
+
 [<StructuredFormatDisplayAttribute("{AsString}")>]
 type Declaration =   FreeValue of Var * SchemedExpr
                    | FreeFunction of Var * TypedFunction
                    | FreeRecFunction of Var * TypedFunction
                    | ClosureDecl of TypedClosure
                    | ClosureRecDecl of TypedClosure
+                   | TypeDecl of Var * TypeDecl
 with
     member this.Name =
         match this with
@@ -188,6 +213,7 @@ with
         | FreeRecFunction(name,_) -> name
         | ClosureDecl(Closure(name,_,_)) -> name
         | ClosureRecDecl(Closure(name,_,_)) -> name
+        | TypeDecl(name,_) -> name
     member this.Scheme =
         match this with
         | FreeValue(_,expr) -> expr.type_
@@ -195,6 +221,7 @@ with
         | FreeRecFunction(_,f) -> f.type_
         | ClosureDecl(Closure(_,f,_)) -> f.type_
         | ClosureRecDecl(Closure(_,f,_)) -> f.type_
+        | TypeDecl(_,_) -> failwith "okashii"
 
 type Type
 with
@@ -209,6 +236,12 @@ with
                 |> Seq.map (fun (Var(name),type_) -> sprintf "%s => %A" name type_)
                 |> String.concat " "
             sprintf "%A {%s}" t capturedString
+        | TRecord(RecordType(fields)) ->
+            let fieldsString = 
+                Map.toSeq fields
+                |> Seq.map (fun (Var(name),type_) -> sprintf "%s: %A" name type_)
+                |> String.concat "; "
+            sprintf "{ %s }" fieldsString
 
 type Scheme
 with
@@ -239,6 +272,13 @@ with
         | If(cond,ifTrue,ifFalse) ->
             sprintf "if %A then %A else %A" cond ifTrue ifFalse
         | BinOp(lhs,op,rhs) -> sprintf "(%A %A %A)" lhs op rhs
+        | RecordLiteral(fields) ->
+            let fieldsString =
+                Map.toSeq fields
+                |> Seq.map (fun (Var(name),value) -> sprintf "%s = %A" name value)
+                |> String.concat "; "
+            sprintf "{ %s }" fieldsString
+        | RecordAccess(obj,Var(name)) -> sprintf "(%A).%s" obj name 
 
 type TypedExpr
 with
@@ -272,13 +312,34 @@ with
                 |> Seq.map (fun (Var(name),type_) -> sprintf "%s => %A" name type_)
                 |> String.concat " "
             sprintf "closure rec <%s: %A> %A {%s} = %A" name f.type_ f.value.argument capturedString f.value.body
+        | TypeDecl(Var(name),decl) ->
+            match decl with
+            | TyAlias(other) -> sprintf "type %s = %A" name other
+            | Record(fields) -> 
+                let fieldsString = 
+                    Map.toSeq fields
+                    |> Seq.map (fun (Var(name),type_) -> sprintf "%s: %A" name type_)
+                    |> String.concat "; "
+                sprintf "{ %s }" fieldsString
 
-let rec inferExpr (env: TypeEnv) (expr: Closure.Expr): Substitution * TypedExpr =
+type Environment = { typeEnv: TypeEnv; typeNameEnv: Map<Var,Type>; recordEnv: Map<Var,RecordType> }
+with
+    member this.updateTypeEnv typeEnv =
+        { typeEnv = typeEnv; typeNameEnv = this.typeNameEnv; recordEnv = this.recordEnv }
+    member this.updateTypeNameEnv typeNameEnv =
+        { typeEnv = this.typeEnv; typeNameEnv = typeNameEnv; recordEnv = this.recordEnv }
+    member this.updateRecordEnv recordEnv =
+        { typeEnv = this.typeEnv; typeNameEnv = this.typeNameEnv; recordEnv = recordEnv }
+    member this.Apply subst =
+        this.updateTypeEnv (this.typeEnv.Apply subst)
+
+let rec inferExpr (env: Environment) (expr: Closure.Expr): Substitution * TypedExpr =
+    let typeEnv = env.typeEnv
     match expr with
     | Closure.Literal(x) -> emptySubstitution,Literal(x).WithType intType
     | Closure.ExternRef(name) -> 
         let expr = ExternRef(name)
-        let (TypeEnv(env)) = env
+        let (TypeEnv(env)) = typeEnv
         match env.TryFind name with
         | None ->
             printfn "%A not found in the environment: %A" name env
@@ -318,7 +379,7 @@ let rec inferExpr (env: TypeEnv) (expr: Closure.Expr): Substitution * TypedExpr 
     | Closure.BinOp(lhs,op,rhs) ->
         let opType =
             let op = Var(sprintf "%A" op)
-            let (TypeEnv(env)) = env
+            let (TypeEnv(env)) = typeEnv
             match Map.tryFind op env with
             | None -> failwithf "operator %A not found" op
             | Some(decl) -> instantiate decl
@@ -331,16 +392,16 @@ let rec inferExpr (env: TypeEnv) (expr: Closure.Expr): Substitution * TypedExpr 
         subst,BinOp(lhs.Apply subst,op,rhs.Apply subst).WithType (retType.Apply subst)
     | Closure.Alias(name,value,body) ->
         let sv,value = inferExpr env value
-        let env = (env.Apply sv).Add name (generalize (env.Apply sv) value.type_)
-        let sb,body = inferExpr env body
+        let typeEnv = (typeEnv.Apply sv).Add name (generalize (typeEnv.Apply sv) value.type_)
+        let sb,body = inferExpr (env.updateTypeEnv typeEnv) body
         let subst = composeSubstitution sv sb
         subst,Alias(name,value.Apply subst,body.Apply subst).WithType (body.type_.Apply subst)
     | Closure.AliasRec(name,value,body) ->
         let valueType = newTyVar "t"
-        let env = env.Add name (Scheme.fromType valueType)
-        let sv,value = inferExpr env value
-        let env = (env.Apply sv).Add name (generalize (env.Apply sv) value.type_)
-        let sb,body = inferExpr env body
+        let typeEnv = typeEnv.Add name (Scheme.fromType valueType)
+        let sv,value = inferExpr (env.updateTypeEnv typeEnv) value
+        let typeEnv = (typeEnv.Apply sv).Add name (generalize (typeEnv.Apply sv) value.type_)
+        let sb,body = inferExpr (env.updateTypeEnv typeEnv) body
         let subst = composeSubstitution sv sb
         subst,AliasRec(name,value.Apply subst,body.Apply subst).WithType (body.type_.Apply subst)
     | Closure.ApplyClosure(cls,applications) ->
@@ -348,8 +409,8 @@ let rec inferExpr (env: TypeEnv) (expr: Closure.Expr): Substitution * TypedExpr 
             let s,expr = inferExpr (env.Apply subst) expr
             composeSubstitution subst s,Map.add name expr applications
         let subst,applications = Map.fold folder (emptySubstitution,Map.empty) applications
-        let env = env.Apply subst
-        let sc,cls = inferExpr env cls
+        let typeEnv = typeEnv.Apply subst
+        let sc,cls = inferExpr (env.updateTypeEnv typeEnv) cls
         let subst = composeSubstitution subst sc
         let su = unify cls.type_ (TClosure(newTyVar "t",applications |> Map.map (fun _ expr -> expr.type_.Apply subst)))
         let subst = composeSubstitution subst su
@@ -359,27 +420,69 @@ let rec inferExpr (env: TypeEnv) (expr: Closure.Expr): Substitution * TypedExpr 
                     | TClosure(type_,_) -> type_
                     | _ -> failwith "must be closure"
         subst,ApplyClosure(cls.Apply subst,applications).WithType type_
+    | Closure.RecordLiteral(fields) ->
+        let recordType types =
+            let rec impl type_ types =
+                match types with
+                | [] -> Right(type_)
+                | type_' :: types when type_ = type_' -> impl type_ types
+                | type_' :: _ -> Left(type_,type_')
+            match types with
+            | [] -> failwith "record literal cannot be empty"
+            | type_ :: [] -> type_
+            | type_ :: types -> 
+                match impl type_ types with
+                | Right(type_) -> type_
+                | Left(type_,type_') -> failwithf "assumed record types %A and %A are different" type_ type_'
+        let assumedTypes = fields
+                           |> Map.toSeq
+                           |> Seq.map fst
+                           |> Seq.map 
+                                (
+                                    fun field -> match env.recordEnv.TryFind field with
+                                                 | None -> failwith "record type not found"
+                                                 | Some(x) -> x
+                                )
+                           |> Seq.toList
+        let recordType = recordType assumedTypes
 
-let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declaration =
+        let folder (subst,fields) name init =
+            let s,init = inferExpr (env.Apply subst) init
+            let subst = composeSubstitution subst s
+            subst,Map.add name init fields
+        let subst,fields = Map.fold folder (emptySubstitution,Map.empty) fields
+        subst,RecordLiteral(fields).WithType (TRecord(recordType))
+    | Closure.RecordAccess(obj,name) -> 
+        let sobj,obj = inferExpr env obj
+        match obj.type_ with
+        | TRecord(RecordType(recordType)) ->
+            match recordType.TryFind name with
+            | Some(fieldType) -> sobj,RecordAccess(obj,name).WithType (fieldType.Apply sobj)
+            | None -> failwithf "type %A does not have a field '%A'" recordType name 
+        | _ -> failwithf "not a record: %A" obj
+
+let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Either<Map<Var,Type> * Map<Var,RecordType>,Declaration> =
+    printfn "typeEnv %A" env.typeEnv
     match decl with
     | Closure.FreeValue(name,value) ->
         let s,value = inferExpr env value
-        let (schemed: SchemedExpr) = {value = value.value; type_ = generalize (env.Apply s) value.type_} 
-        s,FreeValue(name,schemed)
+        let env = env.Apply s
+        let (schemed: SchemedExpr) = {value = value.value; type_ = generalize env.typeEnv value.type_} 
+        s,Right(FreeValue(name,schemed))
     | Closure.FreeFunction(name,f) ->
         let argTypes = List.map (fun _ -> newTyVar "t") f.argument
         let innerEnv = List.zip f.argument argTypes
                        |> Map.ofList
                        |> Map.map (fun _ t -> Scheme.fromType t)
                        |> TypeEnv
-                       |> env.Merge
-        let s,body = inferExpr innerEnv f.body
+                       |> env.typeEnv.Merge
+        let s,body = inferExpr (env.updateTypeEnv innerEnv) f.body
         let thisScheme = 
             let thisType = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
                            |> fun type_ -> type_.Apply s
-            generalize (env.Apply s) thisType
+            generalize (env.typeEnv.Apply s) thisType
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
-        s,FreeFunction(name,value)
+        s,Right(FreeFunction(name,value))
     | Closure.FreeRecFunction(name,f) ->
         let thisType = newTyVar "t"
         let argTypes = List.map (fun _ -> newTyVar "t") f.argument
@@ -388,17 +491,17 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
                       |> Map.ofList
                       |> Map.map (fun _ t -> Scheme.fromType t)
                       |> TypeEnv
-                      |> env.Merge
+                      |> env.typeEnv.Merge
             env.Add name (Scheme.fromType thisType)
-        let s1,body = inferExpr innerEnv f.body
+        let s1,body = inferExpr (env.updateTypeEnv innerEnv) f.body
         let s2 = 
             let thisType' = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
                             |> fun type_ -> type_.Apply s1
             unify (thisType.Apply s1) thisType'
         let s = composeSubstitution s1 s2
-        let thisScheme = generalize (env.Apply s) (thisType.Apply s)
+        let thisScheme = generalize (env.typeEnv.Apply s) (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}  
-        s,FreeRecFunction(name,value)
+        s,Right(FreeRecFunction(name,value))
     | Closure.ClosureDecl(Closure.Closure(name,f,capturedVariables)) ->
         let argTypes = List.map (fun _ -> newTyVar "t") f.argument
         let captured = capturedVariables
@@ -407,22 +510,22 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
         let capturedEnv = Map.map (fun _ t -> Scheme.fromType t) captured
                           |> TypeEnv
         let innerEnv = 
-            let env = env.Merge capturedEnv
+            let env = env.typeEnv.Merge capturedEnv
             List.zip f.argument argTypes
             |> Map.ofList
             |> Map.map (fun _ t -> Scheme.fromType t)
             |> TypeEnv
             |> env.Merge
-        let s,body = inferExpr innerEnv f.body
+        let s,body = inferExpr (env.updateTypeEnv innerEnv) f.body
         let captured = captured
                        |> Map.map (fun _ t -> t.Apply s)
         let thisScheme = 
             let thisType = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
                            |> fun type_ -> type_.Apply s
             let closureType = TClosure(thisType.Apply s,captured)
-            generalize (env.Apply s) closureType
+            generalize (env.typeEnv.Apply s) closureType
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
-        s,ClosureDecl(Closure(name,value,captured))
+        s,Right(ClosureDecl(Closure(name,value,captured)))
     | Closure.ClosureRecDecl(Closure.Closure(name,f,capturedVariables)) ->
         let thisType = newTyVar "t"
         let argTypes = List.map (fun _ -> newTyVar "t") f.argument
@@ -434,12 +537,12 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
                       |> Map.ofList
                       |> Map.map (fun _ t -> Scheme.fromType t)
                       |> TypeEnv
-                      |> env.Merge
+                      |> env.typeEnv.Merge
             let env = env.Add name (Scheme.fromType thisType)
             let capturedEnv = Map.map (fun _ t -> Scheme.fromType t) captured
                               |> TypeEnv
             env.Merge capturedEnv
-        let s1,body = inferExpr innerEnv f.body
+        let s1,body = inferExpr (env.updateTypeEnv innerEnv) f.body
         let captured = captured
                        |> Map.map (fun _ t -> t.Apply s1)
         let closureType =
@@ -448,14 +551,38 @@ let inferDecl (env: TypeEnv) (decl: Closure.Declaration): Substitution * Declara
             TClosure(thisType.Apply s1,captured)
         let s2 = unify thisType closureType
         let s = composeSubstitution s1 s2
-        let thisScheme = generalize (env.Apply s) (thisType.Apply s)
+        let thisScheme = generalize (env.typeEnv.Apply s) (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
-        s,ClosureRecDecl(Closure(name,value,captured))
+        s,Right(ClosureRecDecl(Closure(name,value,captured)))
+    | Closure.TypeDecl(name,decl) -> 
+        match decl with
+        | Closure.Record(fields) -> 
+            // 本当は関数型とか処理必要
+            let recordType = fields
+                             |> Map.map 
+                                    (fun _ type_ -> match Map.tryFind type_ env.typeNameEnv with
+                                                    | None -> failwithf "type %A not found in %A" type_ env.typeNameEnv
+                                                    | Some(type_) -> type_
+                                    )
+                             |> RecordType
+            let recordEnv = fields
+                            |> Map.toSeq
+                            |> Seq.map fst
+                            |> Seq.fold (fun env name -> Map.add name recordType env) env.recordEnv
+            emptySubstitution,Left(Map.add name (TRecord(recordType)) env.typeNameEnv,recordEnv)
+        | Closure.TyAlias(type_) -> 
+            // 本当は関数型とか処理必要
+            match env.typeNameEnv.TryFind type_ with
+            | None -> failwithf "type %A not found in env %A" name env.typeNameEnv
+            | Some(type_) -> emptySubstitution,Left(Map.add name type_ env.typeNameEnv,env.recordEnv)
 
-let inferDecls (env: TypeEnv) (decls: Closure.Declaration list): Declaration list =
+let inferDecls (env: Environment) (decls: Closure.Declaration list): Declaration list =
     let folder (env,decls) decl =
-        let s,decl = inferDecl env decl
-        (env.Apply s).Add decl.Name decl.Scheme,decl :: decls
+        let s,declaration = inferDecl env decl
+        let env = env.Apply s
+        match declaration with
+        | Left(typeNameEnv,recordEnv) -> (env.updateTypeNameEnv typeNameEnv).updateRecordEnv recordEnv,decls
+        | Right(decl) -> env.updateTypeEnv(env.typeEnv.Add decl.Name decl.Scheme),decl :: decls
     let _,decls = List.fold folder (env,[]) decls
     // keep the ordering of declarations
     List.rev decls

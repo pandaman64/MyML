@@ -4,11 +4,14 @@ open Common
 [<EntryPoint>]
 let main argv = 
     let source = """
+        type record = { field: Int };
         let succ x = x + 1;
         let zero = 0;
         let eqq x y = 1;
         let rec sum x = if x = 0 then 0 else x + sum (x - 1);
-        let main = sum zero;
+        let main = 
+            let x = { field = 0 } in
+            x.field;
         """
     printfn "%s" source
     match run Parser.pprogram source with
@@ -40,7 +43,14 @@ let main argv =
             |> Map.ofSeq
             |> Map.map (fun _ t -> TypeInference.Scheme.fromType t)
             |> TypeInference.TypeEnv
-        let inferredDecls = TypeInference.inferDecls typeEnv extractedDecls
+        let typeNameEnv = 
+            [
+                Var("Int"),TypeInference.intType;
+                Var("Bool"),TypeInference.boolType;
+            ]
+            |> Map.ofSeq
+        let env:TypeInference.Environment = { typeEnv = typeEnv; typeNameEnv = typeNameEnv; recordEnv = Map.empty }
+        let inferredDecls = TypeInference.inferDecls env extractedDecls
         printfn "type inferred declarations:"
         for decl in inferredDecls do
             printfn "  %A" decl

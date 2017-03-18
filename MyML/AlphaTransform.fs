@@ -9,6 +9,8 @@ type Expr =   Literal of int
             | Apply of Expr * Expr list
             | If of Expr * Expr * Expr
             | BinOp of Expr * Operator * Expr
+            | RecordLiteral of Map<Var,Expr>
+            | RecordAccess of Expr * Var
 
 type TypeDecl =   Record of Map<Var,Var>
                 | TyAlias of Var
@@ -67,6 +69,13 @@ let rec alphaTransformExpr (env: Environment) (expr: Parser.Expr): Expr =
             //VarRef(newVar (sprintf "%s_notfound" name))
         | Some(expr) -> expr
     | Parser.Expr.BinOp(lhs,op,rhs) -> BinOp(alphaTransformExpr env lhs,op,alphaTransformExpr env rhs)
+    | Parser.Expr.RecordLiteral(fields) -> 
+        let fields = Map.toSeq fields
+                     |> Seq.map (fun (name,value) -> Var(name),alphaTransformExpr env value)
+                     |> Map.ofSeq
+        RecordLiteral(fields)
+    | Parser.Expr.RecordAccess(obj,field) ->
+        RecordAccess(alphaTransformExpr env obj,Var(field))
 
 let alphaTransformDecl (env: Environment) (expr: Parser.Declaration): Declaration =
     match expr with
