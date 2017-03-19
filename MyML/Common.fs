@@ -7,6 +7,9 @@ with
         let (Var(name)) = this
         name
 
+type Signature =   SigLiteral of Var
+                 | SigArrow of Signature * Signature
+
 [<StructuredFormatDisplayAttribute("{AsString}")>]
 type Operator =   Add
                 | Subtract

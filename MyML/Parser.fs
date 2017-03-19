@@ -13,8 +13,11 @@ type Expr =   IntegerLiteral of int
             | RecordLiteral of Map<string,Expr>
             | RecordAccess of Expr * string
 
-type TypeDecl =   Record of Map<string,string>
-                | TyAlias of string
+type Signature =   SigLiteral of string
+                 | SigArrow of Signature * Signature
+
+type TypeDecl =   Record of Map<string,Signature>
+                | TyAlias of Signature
 
 type Declaration = LetDecl of string * string list * Expr
                  | LetRecDecl of string * string list * Expr
@@ -135,7 +138,7 @@ let prelational: MLParser<Expr> =
 let precordLiteral: MLParser<Expr> = parse{
     do! pchar '{' >>. spaces
     let pfield = pidentifierString .>>. (pchar '=' >>. spaces >>. pexpr)
-    let! content = sepBy pfield (pchar '=' >>. spaces) 
+    let! content = sepEndBy1 pfield (pchar ';' >>. spaces) 
     do! pchar '}' >>. spaces
     return RecordLiteral(Map.ofList content)
 }
@@ -167,10 +170,15 @@ let pletrecDecl:MLParser<Declaration> = parse{
     return LetRecDecl(name,parameters,bind)
 }
 
+let psignature:MLParser<Signature> = 
+    let psigLiteral = pidentifierString |>> SigLiteral
+    let psigArrow = pstring "->" >>. spaces >>% (fun lhs rhs -> SigArrow(lhs,rhs))
+    chainr1 psigLiteral psigArrow
+
 let precordDecl:MLParser<TypeDecl> = parse{
     do! pchar '{' >>. spaces
     let! content = 
-        let pfield = pidentifierString .>>. (pchar ':' >>. spaces >>. pidentifierString)
+        let pfield = pidentifierString .>>. (pchar ':' >>. spaces >>. psignature)
         sepEndBy1 pfield (pchar ';' >>. spaces)
         |>> Map.ofList
     do! pchar '}' >>. spaces
@@ -183,7 +191,7 @@ let ptypeDecl:MLParser<Declaration> = parse{
     do! pchar '=' >>. spaces
     let! decl = choice [
                     precordDecl;
-                    pidentifierString |>> TyAlias
+                    psignature |>> TyAlias
                 ]
     do! pchar ';' >>. spaces
     return TypeDecl(name,decl)

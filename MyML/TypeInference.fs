@@ -461,8 +461,18 @@ let rec inferExpr (env: Environment) (expr: Closure.Expr): Substitution * TypedE
             | None -> failwithf "type %A does not have a field '%A'" recordType name 
         | _ -> failwithf "not a record: %A" obj
 
+let rec resolveType (env: Environment) (signature: Signature): Type =
+    match signature with
+    | SigLiteral(name) -> 
+        match env.typeNameEnv.TryFind name with
+        | None -> failwithf "type %A not found in env %A" name env.typeNameEnv
+        | Some(type_) -> type_
+    | SigArrow(lhs,rhs) ->
+        let lhs = resolveType env lhs
+        let rhs = resolveType env rhs
+        TArrow(lhs,rhs)
+
 let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Either<Map<Var,Type> * Map<Var,RecordType>,Declaration> =
-    printfn "typeEnv %A" env.typeEnv
     match decl with
     | Closure.FreeValue(name,value) ->
         let s,value = inferExpr env value
@@ -557,24 +567,17 @@ let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Eit
     | Closure.TypeDecl(name,decl) -> 
         match decl with
         | Closure.Record(fields) -> 
-            // 本当は関数型とか処理必要
             let recordType = fields
-                             |> Map.map 
-                                    (fun _ type_ -> match Map.tryFind type_ env.typeNameEnv with
-                                                    | None -> failwithf "type %A not found in %A" type_ env.typeNameEnv
-                                                    | Some(type_) -> type_
-                                    )
+                             |> Map.map (fun _ signature -> resolveType env signature)
                              |> RecordType
             let recordEnv = fields
                             |> Map.toSeq
                             |> Seq.map fst
                             |> Seq.fold (fun env name -> Map.add name recordType env) env.recordEnv
             emptySubstitution,Left(Map.add name (TRecord(recordType)) env.typeNameEnv,recordEnv)
-        | Closure.TyAlias(type_) -> 
-            // 本当は関数型とか処理必要
-            match env.typeNameEnv.TryFind type_ with
-            | None -> failwithf "type %A not found in env %A" name env.typeNameEnv
-            | Some(type_) -> emptySubstitution,Left(Map.add name type_ env.typeNameEnv,env.recordEnv)
+        | Closure.TyAlias(signature) -> 
+            let type_ = resolveType env signature
+            emptySubstitution,Left(Map.add name type_ env.typeNameEnv,env.recordEnv)
 
 let inferDecls (env: Environment) (decls: Closure.Declaration list): Declaration list =
     let folder (env,decls) decl =

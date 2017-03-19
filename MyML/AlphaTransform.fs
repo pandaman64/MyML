@@ -12,8 +12,13 @@ type Expr =   Literal of int
             | RecordLiteral of Map<Var,Expr>
             | RecordAccess of Expr * Var
 
-type TypeDecl =   Record of Map<Var,Var>
-                | TyAlias of Var
+let rec sigTransform signature =
+    match signature with
+    | Parser.SigLiteral(x) -> SigLiteral(Var(x))
+    | Parser.SigArrow(lhs,rhs) -> SigArrow(sigTransform lhs,sigTransform rhs)
+
+type TypeDecl =   Record of Map<Var,Signature>
+                | TyAlias of Signature
 
 type Declaration =   LetDecl of Var * Var list * Expr
                    | LetRecDecl of Var * Var list * Expr
@@ -102,9 +107,9 @@ let alphaTransformDecl (env: Environment) (expr: Parser.Declaration): Declaratio
         LetRecDecl(thisVar,argumentVars,value)
     | Parser.Declaration.TypeDecl(name,decl) ->
         let decl = match decl with
-                   | Parser.TyAlias(alias) -> TyAlias(Var(alias))
+                   | Parser.TyAlias(alias) -> TyAlias(sigTransform alias)
                    | Parser.Record(fields) -> Map.toSeq fields
-                                              |> Seq.map (fun (x,y) -> Var(x),Var(y))
+                                              |> Seq.map (fun (x,y) -> Var(x),sigTransform y)
                                               |> Map.ofSeq
                                               |> Record
         TypeDecl(Var(name),decl)

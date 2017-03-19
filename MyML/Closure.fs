@@ -122,8 +122,8 @@ and
 and
     Function = {argument: Var list; body: Expr}
 and
-    TypeDecl =   Record of Map<Var,Var>
-               | TyAlias of Var
+    TypeDecl =   Record of Map<Var,Signature>
+               | TyAlias of Signature
 and
     [<StructuredFormatDisplayAttribute("{AsString}")>]
     Declaration =    FreeValue of Var * Expr

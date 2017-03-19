@@ -4,13 +4,10 @@ open Common
 [<EntryPoint>]
 let main argv = 
     let source = """
-        type record = { field: Int };
+        type record = { field: Int; function: Int -> Int; };
         let succ x = x + 1;
-        let zero = 0;
-        let eqq x y = 1;
-        let rec sum x = if x = 0 then 0 else x + sum (x - 1);
         let main = 
-            let x = { field = 0 } in
+            let x = { field = 0; function = succ; } in
             x.field;
         """
     printfn "%s" source
