@@ -21,7 +21,3 @@ with
 let rec evalExpr (expr: TypeInference.TypedExpr) (env: Environment): Environment =
     match expr.value with
     | TypeInference.Literal(x) -> env.Push (Int(x))
-    | TypeInference.Apply(f,x) -> 
-        let env = evalExpr f env
-        let env = evalExpr x env
-        failwith "???"

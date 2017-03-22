@@ -76,6 +76,77 @@ module Either =
         | Left(_) -> None
         | Right(x) -> Some(x)
 
+module State =
+    type State<'s,'a> = State of ('s -> 'a * 's)
+    type PlainBuilder() =
+        member this.Zero() = failwith "?"
+        member this.Return(a) = 
+            fun s -> (a,s)
+            |> State
+        member this.Bind(State(get),f) =
+            fun s ->
+                let (a,s) = get s
+                let (State(get')) = f a
+                get' s
+            |> State
+    type Builder<'s>(initial: 's) =
+        member this.Return(a) = 
+            fun s -> (a,s)
+            |> State
+        member this.Bind(State(get),f) =
+            fun s ->
+                let (a,s) = get s
+                let (State(get')) = f a
+                get' s
+            |> State
+        member this.Run<'a>(s: State<'s,'a>) = 
+            let (State(get)) = s
+            get initial
+
+    let yaruzo = new PlainBuilder()
+    let withState a = new Builder<_>(a)
+
+    let run s (State(get)) = get s
+    let eval s state = run s state |> fst
+    let exec s state = run s state |> snd
+
+    let get<'a> : State<'a,'a> =
+        fun s -> (s,s)
+        |> State
+    let set s = 
+        fun _ -> ((),s)
+        |> State
+    let modify f =
+        fun s ->
+            ((),f s)
+        |> State
+
+    let (>>=) (State(get)) f =
+         fun s ->
+            let (a,s) = get s
+            let (State(get')) = f a
+            get' s
+        |> State
+    let (>>) s x = s >>= fun _ -> x
+
+    let fmap f s =
+        s >>= (fun x -> yaruzo{ return f x })
+    let rec forM xs = yaruzo{
+        match xs with
+        | [] -> return []
+        | x :: xs -> 
+            let! x = x
+            let! xs = forM xs
+            return x :: xs
+    }
+    let rec foldM f s xs = 
+        match xs with
+        | [] -> yaruzo { return s }
+        | x :: xs ->
+            f s x
+            >>= fun s -> foldM f s xs
+    let rec forEachM f xs = foldM (fun _ x -> f x) () xs
+    
 module UnionFind =
     type Node<'a when 'a: equality> = { value: 'a; parent: Option<Node<'a>> ref; rank: int ref} 
     with

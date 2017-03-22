@@ -333,6 +333,152 @@ with
     member this.Apply subst =
         this.updateTypeEnv (this.typeEnv.Apply subst)
 
+open State
+
+let generalizeM (type_: Type): State<Environment,Scheme> = yaruzo{
+    let! env = get
+    return generalize env.typeEnv type_
+}
+
+let rec inferExpr' (expr: Closure.Expr): State.State<Environment,Substitution * TypedExpr> =
+    let apply subst = modify (fun (env: Environment) -> env.Apply subst)
+    let add name value = modify (fun (env: Environment) -> env.updateTypeEnv (env.typeEnv.Add name value))
+    yaruzo{
+        match expr with
+        | Closure.Literal(x) -> return emptySubstitution,Literal(x).WithType intType
+        | Closure.ExternRef(name) ->
+            let! env = get
+            let (TypeEnv(env)) = env.typeEnv
+            match env.TryFind name with
+            | None ->
+                printfn "%A not found in the environment: %A" name env
+                return emptySubstitution,(ExternRef(name)).WithType (newTyVar "t")
+            | Some(scheme) ->
+                return emptySubstitution,(ExternRef(name)).WithType (instantiate scheme)
+        | Closure.Apply(f,xs) ->
+            let! sf,f = inferExpr' f
+            do! apply sf
+            let! sx,xs = xs
+                         |> List.map (fun x -> inferExpr' x)
+                         |> forM
+                         |> fmap List.unzip
+            let subst = composeSubstitutionMany sx
+            do! apply subst
+            let t = newTyVar "t"
+            let subst' = 
+                let funType =
+                    let xsType = xs |> List.map (fun x -> x.type_)
+                    List.foldBack (fun (xType: Type) funType -> TArrow(xType.Apply subst,funType)) xsType (t.Apply subst)
+                unify (f.type_.Apply subst) funType
+            let subst = composeSubstitution subst subst'
+            return subst,Apply(f.Apply subst,xs |> List.map (fun x -> x.Apply subst)).WithType (t.Apply subst)
+        | Closure.If(cond,ifTrue,ifFalse) ->
+            let! sc,cond = inferExpr' cond
+            do! apply sc
+            let! st,ifTrue = inferExpr' ifTrue
+            do! apply st
+            let! sf,ifFalse = inferExpr' ifFalse
+            let subst = composeSubstitutionMany [sc; st; sf]
+            let suni = unify (ifTrue.type_.Apply subst) (ifFalse.type_.Apply subst)
+            let subst = composeSubstitution subst suni
+            return subst,If(cond.Apply subst,ifTrue.Apply subst,ifFalse.Apply subst).WithType (ifTrue.type_.Apply subst)
+        | Closure.BinOp(lhs,op,rhs) ->
+            let! env = get
+            let opType = 
+                let op = Var(sprintf "%A" op)
+                let (TypeEnv(env)) = env.typeEnv
+                match env.TryFind op with
+                | None -> failwithf "operator %A not found" op
+                | Some(decl) -> instantiate decl
+            let! slhs,lhs = inferExpr' lhs
+            do! apply slhs
+            let! srhs,rhs = inferExpr' rhs
+            do! apply srhs
+            let subst = composeSubstitution slhs srhs
+            let retType = newTyVar "t"
+            let suni = unify opType (TArrow(lhs.type_.Apply subst,TArrow(rhs.type_.Apply subst,retType)))
+            let subst = composeSubstitution subst suni
+            return subst,BinOp(lhs.Apply subst,op,rhs.Apply subst).WithType (retType.Apply subst)
+        | Closure.Alias(name,value,body) ->
+            let! sv,value = inferExpr' value
+            do! apply sv
+            let! env = get
+            do! generalizeM value.type_ >>= add name 
+            let! sb,body = inferExpr' body
+            do! apply sb
+            let subst = composeSubstitution sv sb
+            return subst,Alias(name,value,body).WithType body.type_
+        | Closure.AliasRec(name,value,body) ->
+            let valueType = newTyVar "t"
+            do! add name (Scheme.fromType valueType)
+            let! sv,value = inferExpr' value
+            do! apply sv
+            let! env = get
+            do! generalizeM value.type_ >>= add name
+            let! sb,body = inferExpr' body
+            return composeSubstitution sv sb,AliasRec(name,value.Apply sb,body).WithType body.type_
+        | Closure.ApplyClosure(cls,applications) ->
+            let folder (subst,applications) (name,expr) = yaruzo{
+                let! s,expr = inferExpr' expr
+                do! apply s
+                return composeSubstitution subst s,Map.add name expr applications
+            }
+            let! subst,applications = foldM folder (emptySubstitution,Map.empty) (Map.toList applications)
+            do! apply subst
+            let! sc,cls = inferExpr' cls
+            do! apply sc
+            let subst = composeSubstitution subst sc
+            let underlyingType = newTyVar "t"
+            let suni = unify (cls.type_.Apply subst) (TClosure(underlyingType,applications |> Map.map (fun _ expr -> expr.type_.Apply subst)))
+            let subst = composeSubstitution subst suni
+
+            // the type of closure application is the underlying type of the closure
+            return subst,ApplyClosure(cls.Apply subst,applications |> Map.map (fun _ t -> t.Apply subst) ).WithType (underlyingType.Apply subst)
+        | Closure.RecordLiteral(fields) ->
+            let! env = get
+            let recordType types =
+                let rec impl type_ types =
+                    match types with
+                    | [] -> Right(type_)
+                    | type_' :: types when type_ = type_' -> impl type_ types
+                    | type_' :: _ -> Left(type_,type_')
+                match types with
+                | [] -> failwith "record literal cannot be empty"
+                | type_ :: [] -> type_
+                | type_ :: types -> 
+                    match impl type_ types with
+                    | Right(type_) -> type_
+                    | Left(type_,type_') -> failwithf "assumed record types %A and %A are different" type_ type_'
+            let assumedTypes = fields
+                               |> Map.toSeq
+                               |> Seq.map fst
+                               |> Seq.map 
+                                    (
+                                        fun field -> match env.recordEnv.TryFind field with
+                                                     | None -> failwith "record type not found"
+                                                     | Some(x) -> x
+                                    )
+                               |> Seq.toList
+            let recordType = recordType assumedTypes
+
+            let folder (subst,fields) (name,init) = yaruzo{
+                do! apply subst
+                let! s,init = inferExpr' init
+                let subst = composeSubstitution subst s
+                return subst,Map.add name init fields
+            }
+            let! subst,fields = foldM folder (emptySubstitution,Map.empty) (Map.toList fields)
+            return subst,RecordLiteral(fields).WithType (TRecord(recordType))
+        | Closure.RecordAccess(obj,name) -> 
+            let! sobj,obj = inferExpr' obj
+            match obj.type_ with
+            | TRecord(RecordType(recordType)) ->
+                match recordType.TryFind name with
+                | Some(fieldType) -> return sobj,RecordAccess(obj,name).WithType (fieldType.Apply sobj)
+                | None -> return failwithf "type %A does not have a field '%A'" recordType name 
+            | _ -> return failwithf "not a record: %A" obj
+    }
+
 let rec inferExpr (env: Environment) (expr: Closure.Expr): Substitution * TypedExpr =
     let typeEnv = env.typeEnv
     match expr with
@@ -472,6 +618,158 @@ let rec resolveType (env: Environment) (signature: Signature): Type =
         let rhs = resolveType env rhs
         TArrow(lhs,rhs)
 
+let inferDecl' (decl: Closure.Declaration): State<Environment,Substitution * Declaration option> = yaruzo{
+    let apply subst = modify (fun (env: Environment) -> env.Apply subst)
+    let addTypeEnv name value = modify (fun (env: Environment) -> env.updateTypeEnv (env.typeEnv.Add name value))
+    let addAliasEnv name type_ = modify (fun (env: Environment) -> env.updateTypeNameEnv (env.typeNameEnv.Add (name,type_)))
+    let addRecordEnv name record = modify (fun (env: Environment) -> env.updateRecordEnv (env.recordEnv.Add (name,record)))
+    match decl with
+    | Closure.FreeValue(name,value) ->
+        let! s,value = inferExpr' value
+        do! apply s
+        let! env = get
+        let! schemed = 
+            generalizeM value.type_
+            >>= fun scheme -> yaruzo{ return { SchemedExpr.value = value.value; type_ = scheme } }
+        do! addTypeEnv name schemed.type_
+        return s,Some(FreeValue(name,schemed))
+    | Closure.FreeFunction(name,f) ->
+        let argTypes = List.map (fun _ -> newTyVar "t") f.argument
+        let! env = get
+        let s,body = 
+            let innerEnv = List.zip f.argument argTypes
+                           |> Map.ofList
+                           |> Map.map (fun _ t -> Scheme.fromType t)
+                           |> TypeEnv
+                           |> env.typeEnv.Merge
+            eval (env.updateTypeEnv innerEnv) (inferExpr' f.body)
+        do! apply s
+        let! thisScheme = 
+            let thisType = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
+                           |> fun type_ -> type_.Apply s
+            generalizeM thisType
+        do! addTypeEnv name thisScheme
+        let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
+        return s,Some(FreeFunction(name,value))
+    | Closure.FreeRecFunction(name,f) ->
+        let thisType = newTyVar "t"
+        let argTypes = List.map (fun _ -> newTyVar "t") f.argument
+        let! env = get
+        let s1,body = 
+            let innerEnv =
+                let env = List.zip f.argument argTypes
+                          |> Map.ofList
+                          |> Map.map (fun _ t -> Scheme.fromType t)
+                          |> TypeEnv
+                          |> env.typeEnv.Merge
+                env.Add name (Scheme.fromType thisType)
+            eval (env.updateTypeEnv innerEnv) (inferExpr' f.body)
+        do! apply s1
+        let s2 = 
+            let thisType' = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
+                            |> fun type_ -> type_.Apply s1
+            unify (thisType.Apply s1) thisType'
+        let s = composeSubstitution s1 s2
+        do! apply s
+        let! thisScheme = generalizeM (thisType.Apply s)
+        let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}  
+        return s,Some(FreeRecFunction(name,value))
+    | Closure.ClosureDecl(Closure.Closure(name,f,capturedVariables)) ->
+        let argTypes = List.map (fun _ -> newTyVar "t") f.argument
+        let captured = capturedVariables
+                       |> Set.map (fun v -> v,newTyVar "t")
+                       |> Map.ofSeq
+        let! env = get
+        let s,body = 
+            let innerEnv = 
+                let capturedEnv = Map.map (fun _ t -> Scheme.fromType t) captured
+                                  |> TypeEnv
+                let env = env.typeEnv.Merge capturedEnv
+                List.zip f.argument argTypes
+                |> Map.ofList
+                |> Map.map (fun _ t -> Scheme.fromType t)
+                |> TypeEnv
+                |> env.Merge
+            eval (env.updateTypeEnv innerEnv) (inferExpr' f.body)
+        do! apply s
+        let captured = captured
+                       |> Map.map (fun _ t -> t.Apply s)
+        let! thisScheme = 
+            let thisType = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
+                           |> fun type_ -> type_.Apply s
+            let closureType = TClosure(thisType.Apply s,captured)
+            generalizeM closureType
+
+        do! addTypeEnv name thisScheme
+
+        let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
+        return s,Some(ClosureDecl(Closure(name,value,captured)))
+    | Closure.ClosureRecDecl(Closure.Closure(name,f,capturedVariables)) ->
+        let thisType = newTyVar "t"
+        let argTypes = List.map (fun _ -> newTyVar "t") f.argument
+        let captured = capturedVariables
+                       |> Set.map (fun v -> v,newTyVar "t")
+                       |> Map.ofSeq
+        
+        let! env = get
+        
+        let s1,body = 
+            let innerEnv = 
+                let env = List.zip f.argument argTypes
+                          |> Map.ofList
+                          |> Map.map (fun _ t -> Scheme.fromType t)
+                          |> TypeEnv
+                          |> env.typeEnv.Merge
+                let env = env.Add name (Scheme.fromType thisType)
+                let capturedEnv = Map.map (fun _ t -> Scheme.fromType t) captured
+                                  |> TypeEnv
+                env.Merge capturedEnv
+            eval (env.updateTypeEnv innerEnv) (inferExpr' f.body)
+
+        do! apply s1
+
+        printfn "s1 %A" s1
+
+        let captured = captured
+                       |> Map.map (fun _ t -> t.Apply s1)
+        let closureType =
+            let thisType = List.foldBack (fun argType thisType -> TArrow(argType,thisType)) argTypes body.type_
+                           |> fun type_ -> type_.Apply s1
+            TClosure(thisType.Apply s1,captured)
+        let s2 = unify thisType closureType
+        let s = composeSubstitution s1 s2
+
+        printfn "s2 %A" s2
+
+        do! apply s
+
+        let! env = get
+        let! thisScheme = generalizeM (thisType.Apply s)
+
+        do! addTypeEnv name thisScheme
+
+        let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme.Apply s}
+        return s,Some(ClosureRecDecl(Closure(name,value,captured)))
+    | Closure.TypeDecl(name,decl) -> 
+        match decl with
+        | Closure.Record(fields) -> 
+            let! env = get
+            let recordType = fields
+                             |> Map.map (fun _ signature -> resolveType env signature)
+                             |> RecordType                               
+            do! fields
+                |> Map.toList
+                |> List.map fst
+                |> forEachM (fun name -> addRecordEnv name recordType)
+            do! addAliasEnv name (TRecord(recordType))
+            
+            return emptySubstitution,None
+        | Closure.TyAlias(signature) -> 
+            let! env = get
+            do! addAliasEnv name (resolveType env signature)
+            return emptySubstitution,None
+}
+
 let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Either<Map<Var,Type> * Map<Var,RecordType>,Declaration> =
     match decl with
     | Closure.FreeValue(name,value) ->
@@ -553,6 +851,7 @@ let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Eit
                               |> TypeEnv
             env.Merge capturedEnv
         let s1,body = inferExpr (env.updateTypeEnv innerEnv) f.body
+        printfn "s1 %A" s1
         let captured = captured
                        |> Map.map (fun _ t -> t.Apply s1)
         let closureType =
@@ -560,6 +859,7 @@ let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Eit
                            |> fun type_ -> type_.Apply s1
             TClosure(thisType.Apply s1,captured)
         let s2 = unify thisType closureType
+        printfn "s2 %A" s2
         let s = composeSubstitution s1 s2
         let thisScheme = generalize (env.typeEnv.Apply s) (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
@@ -578,6 +878,20 @@ let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Eit
         | Closure.TyAlias(signature) -> 
             let type_ = resolveType env signature
             emptySubstitution,Left(Map.add name type_ env.typeNameEnv,env.recordEnv)
+
+let inferDecls' (env: Environment) (decls: Closure.Declaration list): Declaration list =
+    let apply subst = modify (fun (env: Environment) -> env.Apply subst)
+    let folder decls decl = yaruzo{
+        let! s,declaration = inferDecl' decl
+        do! apply s
+        match declaration with
+        | None -> return decls
+        | Some(decl) -> return decl :: decls
+    }
+    let decls = foldM folder [] decls
+                |> eval env
+    // keep the ordering of declarations
+    List.rev decls
 
 let inferDecls (env: Environment) (decls: Closure.Declaration list): Declaration list =
     let folder (env,decls) decl =

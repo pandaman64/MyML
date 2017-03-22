@@ -6,8 +6,13 @@ let main argv =
     let source = """
         type record = { field: Int; function: Int -> Int; };
         let succ x = x + 1;
+        let sum min max =
+            let rec loop x =
+                if x = max then max
+                else x + loop (x + 1) in
+            loop min;
         let main = 
-            let x = { field = 0; function = succ; } in
+            let x = { field = sum 0 10; function = succ; } in
             x.field;
         """
     printfn "%s" source
@@ -51,8 +56,13 @@ let main argv =
         printfn "type inferred declarations:"
         for decl in inferredDecls do
             printfn "  %A" decl
-        let info = new CodeGen.AssemblyInformation()
-        let assembly = info.generateDecls inferredDecls
-        printfn "%s" (CodeGen.assemblyString assembly)
+        let inferredDecls' = TypeInference.inferDecls' env extractedDecls
+        printfn "type inferred declarations [NEW! Monadic Version]:"
+        for decl in inferredDecls' do
+            printfn "  %A" decl
+        assert (inferredDecls = inferredDecls')
+        //let info = new CodeGen.AssemblyInformation()
+        //let assembly = info.generateDecls inferredDecls
+        //printfn "%s" (CodeGen.assemblyString assembly)
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code
