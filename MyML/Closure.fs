@@ -190,7 +190,10 @@ let capturedVariables (argument: Var list) (value: Expr) (locals: Map<Var,Declar
     let argument = Set.ofList argument
     (Set.intersect (value.freeVariables locals) localVariables) - argument
 
-let makeFunctionDecl (name: Var) (argument: Var list) (value: Expr) (locals: Map<Var,Declaration>) (ctor: Closure -> Declaration): Declaration =
+let makeFunctionDecl (name: Var) (argument: Var list) (value: Expr) (locals: Map<Var,Declaration>) (isRecursive: bool): Declaration =
+    let freeCtor,closureCtor =
+        if isRecursive then FreeRecFunction,ClosureRecDecl
+        else FreeFunction,ClosureDecl
     // the argument is bound in this binding
     let freeVariables = value.freeVariables locals - Set.ofList argument
     if freeVariables.IsEmpty then 
@@ -200,7 +203,7 @@ let makeFunctionDecl (name: Var) (argument: Var list) (value: Expr) (locals: Map
         // both 'name' and 'argument' are unique identifiers, 
         // so simply reusing them will not affect the uniqueness of identifiers
         // (maybe helpful for debugging if we append the function name to the name of this binding?) 
-        FreeFunction(name,{argument = argument; body = value})
+        freeCtor (name,{argument = argument; body = value})
     else
         // the function has free varibales
         // thus we have to treat this as a closure
@@ -208,7 +211,7 @@ let makeFunctionDecl (name: Var) (argument: Var list) (value: Expr) (locals: Map
         // captured variables of the closure have the same name in the original scope. 
         // thus the uniqueness of identifiers will be broken after closure transformation
         // but we just ignore them
-        ctor (Closure(name,{argument = argument; body = value},freeVariables))
+        closureCtor (Closure(name,{argument = argument; body = value},freeVariables))
 
 let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Declaration>) (expr: AlphaTransform.Expr): Declaration list * Expr = 
     match expr with
@@ -229,6 +232,7 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
                        |> List.unzip 
         List.concat (declF :: declX),Apply(f,xs)
     | AlphaTransform.Expr.Let(name,argument,value,body) ->
+        printfn "name = %A" name
         let declValue,value = 
             let locals = addArgumentToEnvironment argument locals
             extractDeclarations externs locals value
@@ -242,7 +246,7 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
         | argument -> 
             // if the value of this let binding has free variables, those may escape from the scope,
             // so we need to declare the function as a closure
-            let decl = makeFunctionDecl name argument value locals ClosureDecl
+            let decl = makeFunctionDecl name argument value locals false
 
             let declBody,body = 
                 let externs = Map.add name decl externs
@@ -255,6 +259,7 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
             // so 'body' will be the evaluation of this expression
             newGlobals,body
     | AlphaTransform.Expr.LetRec(name,argument,value,body) ->
+        printfn "name(rec) = %A" name
         // first, we assume this binding forms a free function
         let declValue,value' = 
             let externs = Map.add name (FreeValue(name,ExternRef(name))) externs
@@ -286,7 +291,8 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
                     |> List.fold (fun locals argument -> Map.add argument (FreeValue(argument,ExternRef(argument))) locals) locals
                 extractDeclarations externs locals value
             
-            let decl = makeFunctionDecl name argument value locals ClosureRecDecl
+            let decl = makeFunctionDecl name argument value locals true
+            printfn "decl(rec) = %A" decl
 
             let declBody,body = 
                 let externs = Map.add name decl externs

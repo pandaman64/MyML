@@ -11,6 +11,9 @@ let main argv =
                 if x = max then max
                 else x + loop (x + 1) in
             loop min;
+        let a x =
+            let rec inf y = inf y in
+            inf;
         let main = 
             let x = { field = sum 0 10; function = succ; } in
             x.field;
@@ -52,15 +55,10 @@ let main argv =
             ]
             |> Map.ofSeq
         let env:TypeInference.Environment = { typeEnv = typeEnv; typeNameEnv = typeNameEnv; recordEnv = Map.empty }
-        let inferredDecls = TypeInference.inferDecls env extractedDecls
-        printfn "type inferred declarations:"
-        for decl in inferredDecls do
-            printfn "  %A" decl
         let inferredDecls' = TypeInference.inferDecls' env extractedDecls
         printfn "type inferred declarations [NEW! Monadic Version]:"
         for decl in inferredDecls' do
             printfn "  %A" decl
-        assert (inferredDecls = inferredDecls')
         //let info = new CodeGen.AssemblyInformation()
         //let assembly = info.generateDecls inferredDecls
         //printfn "%s" (CodeGen.assemblyString assembly)
