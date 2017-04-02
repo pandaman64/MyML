@@ -152,7 +152,7 @@ type Expr =   Literal of int
             | Alias of Var * TypedExpr * TypedExpr
             | AliasRec of Var * TypedExpr * TypedExpr
             | Apply of TypedExpr * TypedExpr list
-            | ApplyClosure of TypedExpr * Map<Var,TypedExpr> 
+            //| ApplyClosure of TypedExpr * Map<Var,TypedExpr> 
             | If of TypedExpr * TypedExpr * TypedExpr
             | BinOp of TypedExpr * Operator * TypedExpr
             | RecordLiteral of Map<Var,TypedExpr>
@@ -165,7 +165,7 @@ with
         | Alias(name,value,body) -> Alias(name,value.Apply subst,body.Apply subst)
         | AliasRec(name,value,body) -> AliasRec(name,value.Apply subst,body.Apply subst)
         | Apply(f,xs) -> Apply(f.Apply subst,xs |> List.map (fun x -> x.Apply subst))
-        | ApplyClosure(cls,applications) -> ApplyClosure(cls.Apply subst,applications)
+        //| ApplyClosure(cls,applications) -> ApplyClosure(cls.Apply subst,applications)
         | If(cond,ifTrue,ifFalse) -> If(cond.Apply subst,ifTrue.Apply subst,ifFalse.Apply subst)
         | BinOp(lhs,op,rhs) -> BinOp(lhs.Apply subst,op,rhs.Apply subst)
         | RecordLiteral(fields) ->
@@ -263,12 +263,12 @@ with
         | AliasRec(Var(name),value,body) ->
             sprintf "alias rec %s = %A in %A" name value body
         | Apply(f,x) -> sprintf "(%A %A)" f x
-        | ApplyClosure(f,applications) -> 
+        (*| ApplyClosure(f,applications) -> 
             let applicationString = 
                 Map.toSeq applications
                 |> Seq.map (fun (Var(name),expr) -> sprintf "%s => %A" name expr)
                 |> String.concat " "
-            sprintf "[%A %s]" f applicationString
+            sprintf "[%A %s]" f applicationString*)
         | If(cond,ifTrue,ifFalse) ->
             sprintf "if %A then %A else %A" cond ifTrue ifFalse
         | BinOp(lhs,op,rhs) -> sprintf "(%A %A %A)" lhs op rhs
@@ -417,7 +417,7 @@ let rec inferExpr' (expr: Closure.Expr): State.State<Environment,Substitution * 
             do! generalizeM value.type_ >>= add name
             let! sb,body = inferExpr' body
             return composeSubstitution sv sb,AliasRec(name,value.Apply sb,body).WithType body.type_
-        | Closure.ApplyClosure(cls,applications) ->
+        (*| Closure.ApplyClosure(cls,applications) ->
             let folder (subst,applications) (name,expr) = yaruzo{
                 let! s,expr = inferExpr' expr
                 do! apply s
@@ -434,32 +434,41 @@ let rec inferExpr' (expr: Closure.Expr): State.State<Environment,Substitution * 
 
             // the type of closure application is the underlying type of the closure
             return subst,ApplyClosure(cls.Apply subst,applications |> Map.map (fun _ t -> t.Apply subst) ).WithType (underlyingType.Apply subst)
-        | Closure.RecordLiteral(fields) ->
+        *)
+        | Closure.RecordLiteral(name,fields) ->
             let! env = get
-            let recordType types =
-                let rec impl type_ types =
-                    match types with
-                    | [] -> Right(type_)
-                    | type_' :: types when type_ = type_' -> impl type_ types
-                    | type_' :: _ -> Left(type_,type_')
-                match types with
-                | [] -> failwith "record literal cannot be empty"
-                | type_ :: [] -> type_
-                | type_ :: types -> 
-                    match impl type_ types with
-                    | Right(type_) -> type_
-                    | Left(type_,type_') -> failwithf "assumed record types %A and %A are different" type_ type_'
-            let assumedTypes = fields
-                               |> Map.toSeq
-                               |> Seq.map fst
-                               |> Seq.map 
-                                    (
-                                        fun field -> match env.recordEnv.TryFind field with
-                                                     | None -> failwith "record type not found"
-                                                     | Some(x) -> x
-                                    )
-                               |> Seq.toList
-            let recordType = recordType assumedTypes
+            
+            let recordType = 
+                match name with
+                | Some(name) -> 
+                    match env.typeNameEnv.TryFind name with
+                    | Some(type_) -> type_
+                    | None -> failwithf "type %A not found" name
+                | None ->
+                    let recordType types =
+                        let rec impl type_ types =
+                            match types with
+                            | [] -> Right(type_)
+                            | type_' :: types when type_ = type_' -> impl type_ types
+                            | type_' :: _ -> Left(type_,type_')
+                        match types with
+                        | [] -> failwith "record literal cannot be empty"
+                        | type_ :: [] -> type_
+                        | type_ :: types -> 
+                            match impl type_ types with
+                            | Right(type_) -> type_
+                            | Left(type_,type_') -> failwithf "assumed record types %A and %A are different" type_ type_'
+                    let assumedTypes = fields
+                                       |> Map.toSeq
+                                       |> Seq.map fst
+                                       |> Seq.map 
+                                            (
+                                                fun field -> match env.recordEnv.TryFind field with
+                                                             | None -> failwith "record type not found"
+                                                             | Some(x) -> x
+                                            )
+                                       |> Seq.toList
+                    TRecord(recordType assumedTypes)
 
             let folder (subst,fields) (name,init) = yaruzo{
                 do! apply subst
@@ -468,7 +477,7 @@ let rec inferExpr' (expr: Closure.Expr): State.State<Environment,Substitution * 
                 return subst,Map.add name init fields
             }
             let! subst,fields = foldM folder (emptySubstitution,Map.empty) (Map.toList fields)
-            return subst,RecordLiteral(fields).WithType (TRecord(recordType))
+            return subst,RecordLiteral(fields).WithType recordType
         | Closure.RecordAccess(obj,name) -> 
             let! sobj,obj = inferExpr' obj
             match obj.type_ with
@@ -550,7 +559,7 @@ let rec inferExpr (env: Environment) (expr: Closure.Expr): Substitution * TypedE
         let sb,body = inferExpr (env.updateTypeEnv typeEnv) body
         let subst = composeSubstitution sv sb
         subst,AliasRec(name,value.Apply subst,body.Apply subst).WithType (body.type_.Apply subst)
-    | Closure.ApplyClosure(cls,applications) ->
+    (*| Closure.ApplyClosure(cls,applications) ->
         let folder (subst,applications) name expr =
             let s,expr = inferExpr (env.Apply subst) expr
             composeSubstitution subst s,Map.add name expr applications
@@ -565,39 +574,47 @@ let rec inferExpr (env: Environment) (expr: Closure.Expr): Substitution * TypedE
         let type_ = match cls.type_.Apply subst with
                     | TClosure(type_,_) -> type_
                     | _ -> failwith "must be closure"
-        subst,ApplyClosure(cls.Apply subst,applications).WithType type_
-    | Closure.RecordLiteral(fields) ->
-        let recordType types =
-            let rec impl type_ types =
-                match types with
-                | [] -> Right(type_)
-                | type_' :: types when type_ = type_' -> impl type_ types
-                | type_' :: _ -> Left(type_,type_')
-            match types with
-            | [] -> failwith "record literal cannot be empty"
-            | type_ :: [] -> type_
-            | type_ :: types -> 
-                match impl type_ types with
-                | Right(type_) -> type_
-                | Left(type_,type_') -> failwithf "assumed record types %A and %A are different" type_ type_'
-        let assumedTypes = fields
-                           |> Map.toSeq
-                           |> Seq.map fst
-                           |> Seq.map 
-                                (
-                                    fun field -> match env.recordEnv.TryFind field with
-                                                 | None -> failwith "record type not found"
-                                                 | Some(x) -> x
-                                )
-                           |> Seq.toList
-        let recordType = recordType assumedTypes
+        subst,ApplyClosure(cls.Apply subst,applications).WithType type_*)
+    | Closure.RecordLiteral(name,fields) ->
+        let recordType = 
+            match name with
+            | Some(name) -> 
+                let (TypeEnv(typeEnv)) = typeEnv
+                match typeEnv.TryFind name with
+                | Some(scheme) -> instantiate scheme
+                | None -> failwith "something wrong"
+            | None -> 
+                let recordType types =
+                    let rec impl type_ types =
+                        match types with
+                        | [] -> Right(type_)
+                        | type_' :: types when type_ = type_' -> impl type_ types
+                        | type_' :: _ -> Left(type_,type_')
+                    match types with
+                    | [] -> failwith "record literal cannot be empty"
+                    | type_ :: [] -> type_
+                    | type_ :: types -> 
+                        match impl type_ types with
+                        | Right(type_) -> type_
+                        | Left(type_,type_') -> failwithf "assumed record types %A and %A are different" type_ type_'
+                let assumedTypes = fields
+                                   |> Map.toSeq
+                                   |> Seq.map fst
+                                   |> Seq.map 
+                                        (
+                                            fun field -> match env.recordEnv.TryFind field with
+                                                         | None -> failwith "record type not found"
+                                                         | Some(x) -> x
+                                        )
+                                   |> Seq.toList
+                TRecord(recordType assumedTypes)
 
         let folder (subst,fields) name init =
             let s,init = inferExpr (env.Apply subst) init
             let subst = composeSubstitution subst s
             subst,Map.add name init fields
         let subst,fields = Map.fold folder (emptySubstitution,Map.empty) fields
-        subst,RecordLiteral(fields).WithType (TRecord(recordType))
+        subst,RecordLiteral(fields).WithType recordType
     | Closure.RecordAccess(obj,name) -> 
         let sobj,obj = inferExpr env obj
         match obj.type_ with
@@ -617,6 +634,7 @@ let rec resolveType (env: Environment) (signature: Signature): Type =
         let lhs = resolveType env lhs
         let rhs = resolveType env rhs
         TArrow(lhs,rhs)
+    | SigTyVar(Var(name)) -> TVariable(TyVar(name))
 
 let inferDecl' (decl: Closure.Declaration): State<Environment,Substitution * Declaration option> = yaruzo{
     let apply subst = modify (fun (env: Environment) -> env.Apply subst)
@@ -674,11 +692,10 @@ let inferDecl' (decl: Closure.Declaration): State<Environment,Substitution * Dec
         let! thisScheme = generalizeM (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}  
         return s,Some(FreeRecFunction(name,value))
-    | Closure.ClosureDecl(Closure.Closure(name,f,capturedVariables)) ->
+    | Closure.ClosureDecl(Closure.Closure(name,f,Closure.RecordType(_,clsType))) ->
         let argTypes = List.map (fun _ -> newTyVar "t") f.argument
-        let captured = capturedVariables
-                       |> Set.map (fun v -> v,newTyVar "t")
-                       |> Map.ofSeq
+        let captured = clsType
+                       |> Map.map (fun _ _ -> newTyVar "t")
         let! env = get
         let s,body = 
             let innerEnv = 
@@ -704,12 +721,11 @@ let inferDecl' (decl: Closure.Declaration): State<Environment,Substitution * Dec
 
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
         return s,Some(ClosureDecl(Closure(name,value,captured)))
-    | Closure.ClosureRecDecl(Closure.Closure(name,f,capturedVariables)) ->
+    | Closure.ClosureRecDecl(Closure.Closure(name,f,Closure.RecordType(_,clsType))) ->
         let thisType = newTyVar "t"
         let argTypes = List.map (fun _ -> newTyVar "t") f.argument
-        let captured = capturedVariables
-                       |> Set.map (fun v -> v,newTyVar "t")
-                       |> Map.ofSeq
+        let captured = clsType
+                       |> Map.map (fun _ _ -> newTyVar "t")
         
         let! env = get
         
@@ -750,9 +766,9 @@ let inferDecl' (decl: Closure.Declaration): State<Environment,Substitution * Dec
 
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme.Apply s}
         return s,Some(ClosureRecDecl(Closure(name,value,captured)))
-    | Closure.TypeDecl(name,decl) -> 
+    | Closure.TypeDecl(decl) -> 
         match decl with
-        | Closure.Record(fields) -> 
+        | Closure.Record(Closure.RecordType(name,fields)) -> 
             let! env = get
             let recordType = fields
                              |> Map.map (fun _ signature -> resolveType env signature)
@@ -764,7 +780,7 @@ let inferDecl' (decl: Closure.Declaration): State<Environment,Substitution * Dec
             do! addAliasEnv name (TRecord(recordType))
             
             return emptySubstitution,None
-        | Closure.TyAlias(signature) -> 
+        | Closure.TyAlias(name,signature) -> 
             let! env = get
             do! addAliasEnv name (resolveType env signature)
             return emptySubstitution,None
@@ -810,11 +826,10 @@ let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Eit
         let thisScheme = generalize (env.typeEnv.Apply s) (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}  
         s,Right(FreeRecFunction(name,value))
-    | Closure.ClosureDecl(Closure.Closure(name,f,capturedVariables)) ->
+    | Closure.ClosureDecl(Closure.Closure(name,f,Closure.RecordType(_,clsType))) ->
         let argTypes = List.map (fun _ -> newTyVar "t") f.argument
-        let captured = capturedVariables
-                       |> Set.map (fun v -> v,newTyVar "t")
-                       |> Map.ofSeq
+        let captured = clsType
+                       |> Map.map (fun _ _ -> newTyVar "t")
         let capturedEnv = Map.map (fun _ t -> Scheme.fromType t) captured
                           |> TypeEnv
         let innerEnv = 
@@ -834,12 +849,11 @@ let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Eit
             generalize (env.typeEnv.Apply s) closureType
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
         s,Right(ClosureDecl(Closure(name,value,captured)))
-    | Closure.ClosureRecDecl(Closure.Closure(name,f,capturedVariables)) ->
+    | Closure.ClosureRecDecl(Closure.Closure(name,f,Closure.RecordType(_,clsType))) ->
         let thisType = newTyVar "t"
         let argTypes = List.map (fun _ -> newTyVar "t") f.argument
-        let captured = capturedVariables
-                       |> Set.map (fun v -> v,newTyVar "t")
-                       |> Map.ofSeq
+        let captured = clsType
+                       |> Map.map (fun _ _ -> newTyVar "t")
         let innerEnv = 
             let env = List.zip f.argument argTypes
                       |> Map.ofList
@@ -864,9 +878,9 @@ let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Eit
         let thisScheme = generalize (env.typeEnv.Apply s) (thisType.Apply s)
         let value = {value = {argument = f.argument; body = body.Apply s}; type_ = thisScheme}
         s,Right(ClosureRecDecl(Closure(name,value,captured)))
-    | Closure.TypeDecl(name,decl) -> 
+    | Closure.TypeDecl(decl) -> 
         match decl with
-        | Closure.Record(fields) -> 
+        | Closure.Record(Closure.RecordType(_,fields)) -> 
             let recordType = fields
                              |> Map.map (fun _ signature -> resolveType env signature)
                              |> RecordType
@@ -874,8 +888,8 @@ let inferDecl (env: Environment) (decl: Closure.Declaration): Substitution * Eit
                             |> Map.toSeq
                             |> Seq.map fst
                             |> Seq.fold (fun env name -> Map.add name recordType env) env.recordEnv
-            emptySubstitution,Left(Map.add name (TRecord(recordType)) env.typeNameEnv,recordEnv)
-        | Closure.TyAlias(signature) -> 
+            emptySubstitution,Left(Map.add decl.Name (TRecord(recordType)) env.typeNameEnv,recordEnv)
+        | Closure.TyAlias(name,signature) -> 
             let type_ = resolveType env signature
             emptySubstitution,Left(Map.add name type_ env.typeNameEnv,env.recordEnv)
 

@@ -6,17 +6,11 @@ let main argv =
     let source = """
         type record = { field: Int; function: Int -> Int; };
         let succ x = x + 1;
-        let sum min max =
-            let rec loop x =
-                if x = max then max
-                else x + loop (x + 1) in
-            loop min;
-        let a x =
-            let rec inf y = inf y in
-            inf;
-        let main = 
-            let x = { field = sum 0 10; function = succ; } in
-            x.field;
+        let const x y = x;
+        let constt x =
+            let f y = x in
+            f;
+        let main = constt 0 1;
         """
     printfn "%s" source
     match run Parser.pprogram source with
@@ -55,12 +49,12 @@ let main argv =
             ]
             |> Map.ofSeq
         let env:TypeInference.Environment = { typeEnv = typeEnv; typeNameEnv = typeNameEnv; recordEnv = Map.empty }
-        let inferredDecls' = TypeInference.inferDecls' env extractedDecls
+        let inferredDecls = TypeInference.inferDecls' env extractedDecls
         printfn "type inferred declarations [NEW! Monadic Version]:"
-        for decl in inferredDecls' do
+        for decl in inferredDecls do
             printfn "  %A" decl
-        //let info = new CodeGen.AssemblyInformation()
-        //let assembly = info.generateDecls inferredDecls
-        //printfn "%s" (CodeGen.assemblyString assembly)
+        let info = new CodeGen.AssemblyInformation()
+        let assembly = info.generateDecls inferredDecls
+        printfn "%s" (CodeGen.assemblyString assembly)
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code

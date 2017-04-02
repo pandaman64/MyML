@@ -236,8 +236,8 @@ type AssemblyInformation() =
                 info.generateExpr value arguments (Set.add name locals)
                 info.Emit None (StLoc(name))
                 info.generateExpr body arguments (Set.add name locals)
-            | TI.ApplyClosure(closure,application) ->
-                failwith "no idea"
+            //| TI.ApplyClosure(closure,application) ->
+            //    failwith "no idea"
             | TI.If(cond,ifTrue,ifFalse) ->
                 // generate like below codes
                 //

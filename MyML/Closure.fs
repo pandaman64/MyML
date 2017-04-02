@@ -39,8 +39,9 @@ with
             |> Set.unionMany
         | AlphaTransform.Expr.RecordAccess(obj,_) -> obj.freeVariables
 
-// name * body * captured variables
-type Closure = Closure of Var * Function * Set<Var>
+type RecordType = RecordType of Var * Map<Var,Signature>
+// name * body * record type
+type Closure = Closure of Var * Function * RecordType
 with
     member this.Name =
         let (Closure(name,_,_)) = this
@@ -52,10 +53,9 @@ and
            | Alias of Var * Expr * Expr
            | AliasRec of Var * Expr * Expr
            | Apply of Expr * Expr list
-           | ApplyClosure of Expr * Map<Var,Expr> 
            | If of Expr * Expr * Expr
            | BinOp of Expr * Operator * Expr
-           | RecordLiteral of Map<Var,Expr>
+           | RecordLiteral of Var option * Map<Var,Expr> // name(option) * fields
            | RecordAccess of Expr * Var
     with
         member this.freeVariables (locals: Map<Var,Declaration>): Set<Var> = 
@@ -74,18 +74,13 @@ and
                 |> List.map (fun x -> x.freeVariables locals)
                 |> cons (f.freeVariables locals)
                 |> Set.unionMany
-            | ApplyClosure(closure,application) ->
-                let keys = Map.toSeq application
-                           |> Seq.map fst
-                           |> Set.ofSeq
-                closure.freeVariables locals - keys
             | If(cond,ifTrue,ifFalse) ->
                 [cond; ifTrue; ifFalse]
                 |> List.map (fun x -> x.freeVariables locals)
                 |> Set.unionMany 
             | BinOp(lhs,_,rhs) ->
                 Set.union (lhs.freeVariables locals) (rhs.freeVariables locals)
-            | RecordLiteral(fields) ->
+            | RecordLiteral(_,fields) ->
                 fields
                 |> Map.toSeq
                 |> Seq.map snd
@@ -102,28 +97,29 @@ and
                 sprintf "alias rec %s = %A in %A" name value body
             | Apply(f,x) ->
                 sprintf "(%A %A)" f x
-            | ApplyClosure(cls,application) -> 
-                let applicationString = application
-                                        |> Map.toSeq
-                                        |> Seq.map (fun (Var(name),value) -> sprintf "%s -> %A" name value)
-                                        |> String.concat " "
-                sprintf "[%A {%s}]" cls applicationString
             | If(cond,ifTrue,ifFalse) ->
                 sprintf "if %A then %A else %A" cond ifTrue ifFalse
             | BinOp(lhs,op,rhs) -> sprintf "(%A %A %A)" lhs op rhs
-            | RecordLiteral(fields) ->
+            | RecordLiteral(name,fields) ->
                 let fieldsString = fields
                                    |> Map.toSeq
                                    |> Seq.map (fun (Var(name),value) -> sprintf "%s = %A" name value)
                                    |> String.concat "; "
-                sprintf "{ %s }" fieldsString
+                match name with
+                | None -> sprintf "{ %s }" fieldsString
+                | Some(Var(name)) -> sprintf "%s { %s }" name fieldsString
             | RecordAccess(obj,Var(field)) -> sprintf "(%A).%s" obj field
         member this.AsString = this.ToString()
 and
     Function = {argument: Var list; body: Expr}
 and
-    TypeDecl =   Record of Map<Var,Signature>
-               | TyAlias of Signature
+    TypeDecl =   Record of RecordType
+               | TyAlias of Var * Signature
+    with
+        member this.Name =
+            match this with
+            | Record(RecordType(name,_)) -> name
+            | TyAlias(name,_) -> name
 and
     [<StructuredFormatDisplayAttribute("{AsString}")>]
     Declaration =    FreeValue of Var * Expr
@@ -131,7 +127,7 @@ and
                    | FreeRecFunction of Var * Function
                    | ClosureDecl of Closure
                    | ClosureRecDecl of Closure
-                   | TypeDecl of Var * TypeDecl
+                   | TypeDecl of TypeDecl
     with
         member this.Name: Var = 
             match this with
@@ -140,7 +136,7 @@ and
             | FreeRecFunction(name,_) -> name
             | ClosureDecl(cls) -> cls.Name
             | ClosureRecDecl(cls) -> cls.Name
-            | TypeDecl(name,_) -> name
+            | TypeDecl(decl) -> decl.Name
         override this.ToString() =
             match this with
             | FreeValue(Var(name),expr) -> sprintf "value %s = %A" name expr
@@ -148,12 +144,12 @@ and
                 sprintf "function %s %A = %A" name argument body
             | FreeRecFunction(Var(name),{argument = argument; body = body}) ->
                 sprintf "function rec %s %A = %A" name argument body
-            | ClosureDecl(Closure(Var(name),{argument = argument; body = body},freeVariables)) ->
-                sprintf "closure %s %A {%s} = %A" name argument (freeVariablesString freeVariables) body
-            | ClosureRecDecl(Closure(Var(name),{argument = argument; body = body},freeVariables)) ->
-                sprintf "closure rec %s %A {%s} = %A" name argument (freeVariablesString freeVariables) body
-            | TypeDecl(Var(name),decl) ->
-                sprintf "type %s = %A" name decl
+            | ClosureDecl(Closure(Var(name),{argument = argument; body = body},clsType)) ->
+                sprintf "closure %s %A {%A} = %A" name argument clsType body
+            | ClosureRecDecl(Closure(Var(name),{argument = argument; body = body},clsType)) ->
+                sprintf "closure rec %s %A {%A} = %A" name argument clsType body
+            | TypeDecl(decl) ->
+                sprintf "type %A = %A" this.Name decl
         member this.AsString = this.ToString()
 
 let newVar =
@@ -175,13 +171,20 @@ let addArgumentToEnvironment (argument: Var list) (externs: Map<Var,Declaration>
 let rec applyFreeVariables (externs: Map<Var,Declaration>) (name: Var) (freeVariables: Set<Var>): Expr =
     let folder applications var =
         match externs.TryFind var with
-        | Some(ClosureDecl(Closure(_,_,freeVariables))) -> 
+        | Some(ClosureDecl(Closure(_,_,RecordType(_,clsType)))) -> 
+            let freeVariables = clsType |> Map.toSeq |> Seq.map fst |> Set.ofSeq
             let value = applyFreeVariables externs name freeVariables
             Map.add var value applications
         | Some(decl) -> Map.add var (ExternRef(var)) applications
         | None -> applications
     let applications = Set.fold folder Map.empty freeVariables
-    ApplyClosure(ExternRef(name),applications)
+    let clsRecord = 
+        match externs.TryFind name with
+        | None -> failwith "not found"
+        | Some(ClosureDecl(Closure(_,_,RecordType(name,_)))) -> RecordLiteral(Some(name),applications)
+        | Some(ClosureRecDecl(Closure(_,_,RecordType(name,_)))) -> RecordLiteral(Some(name),applications)
+        | _ -> failwith "?"
+    Apply(ExternRef(name),[clsRecord])
 
 let capturedVariables (argument: Var list) (value: Expr) (locals: Map<Var,Declaration>): Set<Var> =
     let localVariables = Map.toSeq locals
@@ -190,7 +193,7 @@ let capturedVariables (argument: Var list) (value: Expr) (locals: Map<Var,Declar
     let argument = Set.ofList argument
     (Set.intersect (value.freeVariables locals) localVariables) - argument
 
-let makeFunctionDecl (name: Var) (argument: Var list) (value: Expr) (locals: Map<Var,Declaration>) (isRecursive: bool): Declaration =
+let makeFunctionDecl (name: Var) (argument: Var list) (value: Expr) (locals: Map<Var,Declaration>) (isRecursive: bool): Declaration list =
     let freeCtor,closureCtor =
         if isRecursive then FreeRecFunction,ClosureRecDecl
         else FreeFunction,ClosureDecl
@@ -203,7 +206,7 @@ let makeFunctionDecl (name: Var) (argument: Var list) (value: Expr) (locals: Map
         // both 'name' and 'argument' are unique identifiers, 
         // so simply reusing them will not affect the uniqueness of identifiers
         // (maybe helpful for debugging if we append the function name to the name of this binding?) 
-        freeCtor (name,{argument = argument; body = value})
+        [freeCtor (name,{argument = argument; body = value})]
     else
         // the function has free varibales
         // thus we have to treat this as a closure
@@ -211,7 +214,19 @@ let makeFunctionDecl (name: Var) (argument: Var list) (value: Expr) (locals: Map
         // captured variables of the closure have the same name in the original scope. 
         // thus the uniqueness of identifiers will be broken after closure transformation
         // but we just ignore them
-        closureCtor (Closure(name,{argument = argument; body = value},freeVariables))
+
+        // make new record type for this closure
+        let (Var(nameString)) = name
+        let clsType = freeVariables
+                      |> Set.toSeq
+                      |> Seq.map (fun (Var(v)) -> Var(sprintf "%s" v), SigTyVar(newVar (Var("a"))))
+                      |> Map.ofSeq
+                      |> fun x -> RecordType(Var(sprintf "%s__closure__type" nameString),x)
+
+        [
+            closureCtor (Closure(name,{argument = argument; body = value},clsType));
+            TypeDecl(Record(clsType)); 
+        ]
 
 let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Declaration>) (expr: AlphaTransform.Expr): Declaration list * Expr = 
     match expr with
@@ -232,7 +247,6 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
                        |> List.unzip 
         List.concat (declF :: declX),Apply(f,xs)
     | AlphaTransform.Expr.Let(name,argument,value,body) ->
-        printfn "name = %A" name
         let declValue,value = 
             let locals = addArgumentToEnvironment argument locals
             extractDeclarations externs locals value
@@ -246,20 +260,19 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
         | argument -> 
             // if the value of this let binding has free variables, those may escape from the scope,
             // so we need to declare the function as a closure
-            let decl = makeFunctionDecl name argument value locals false
+            let decls = makeFunctionDecl name argument value locals false
 
             let declBody,body = 
-                let externs = Map.add name decl externs
+                let externs = decls |> List.fold (fun externs decl -> Map.add decl.Name decl externs) externs 
                 extractDeclarations externs locals body
                 
             // lift this let binding to the global scope
-            let newGlobals = decl :: List.append declValue declBody
+            let newGlobals = List.concat [ decls; declValue; declBody ]
 
             // this let binding will be lifted to the global scope, 
             // so 'body' will be the evaluation of this expression
             newGlobals,body
     | AlphaTransform.Expr.LetRec(name,argument,value,body) ->
-        printfn "name(rec) = %A" name
         // first, we assume this binding forms a free function
         let declValue,value' = 
             let externs = Map.add name (FreeValue(name,ExternRef(name))) externs
@@ -285,21 +298,24 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
                 // we fill the unknown body with placeholders
                 let locals =  locals
                               |> Map.add name 
-                                 (ClosureRecDecl(Closure(name,{argument = [Var("placeholder")]; body = ExternRef(Var("placeholder'"))},rule)))
+                                 (ClosureRecDecl(Closure(name,{argument = [Var("placeholder")]; body = ExternRef(Var("placeholder'"))},RecordType(Var("placeholder''"),Map.empty))))
                 let locals = 
                     argument
                     |> List.fold (fun locals argument -> Map.add argument (FreeValue(argument,ExternRef(argument))) locals) locals
                 extractDeclarations externs locals value
             
-            let decl = makeFunctionDecl name argument value locals true
-            printfn "decl(rec) = %A" decl
+            let decls = makeFunctionDecl name argument value locals true
+
+            // if lifted declaration is free, 
+            // all appearances of value itself in value must be changed into naked ExternRef
+            // but we ignore this now
 
             let declBody,body = 
-                let externs = Map.add name decl externs
+                let externs = decls |> List.fold (fun externs decl -> Map.add decl.Name decl externs) externs
                 extractDeclarations externs locals body
                 
             // lift this let binding to the global scope
-            let newGlobals = decl :: List.append declValue declBody
+            let newGlobals = List.concat [ decls; declValue; declBody ]
 
             // this let binding will be lifted to the global scope, 
             // so 'body' will be the evaluation of this expression
@@ -307,9 +323,11 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
     | AlphaTransform.Expr.VarRef(name) ->
         let variables = unionMap externs locals
         match variables.TryFind name with
-        | Some(ClosureDecl(Closure(name,_,freeVariables))) -> 
+        | Some(ClosureDecl(Closure(name,_,RecordType(_,clsType)))) -> 
+            let freeVariables = clsType |> Map.toSeq |> Seq.map fst |> Set.ofSeq
             List.empty,applyFreeVariables variables name freeVariables
-        | Some(ClosureRecDecl(Closure(name,_,freeVariables))) -> 
+        | Some(ClosureRecDecl(Closure(name,_,RecordType(_,clsType)))) -> 
+            let freeVariables = clsType |> Map.toSeq |> Seq.map fst |> Set.ofSeq
             List.empty,applyFreeVariables variables name freeVariables
         | Some(decl) -> List.empty,ExternRef(decl.Name)
         | None ->
@@ -320,7 +338,7 @@ let rec extractDeclarations (externs: Map<Var,Declaration>) (locals: Map<Var,Dec
         |> Map.toSeq
         |> Seq.map (fun (name,expr) -> name,extractDeclarations externs locals expr)
         |> Seq.fold (fun (decls,fields) (name,(decls',expr)) -> (List.append decls decls',Map.add name expr fields)) ([],Map.empty)
-        |> fun (decls,fields) -> decls,RecordLiteral(fields)
+        |> fun (decls,fields) -> decls,RecordLiteral(None,fields)
     | AlphaTransform.Expr.RecordAccess(obj,field) -> 
         let decls,obj = extractDeclarations externs locals obj
         decls,RecordAccess(obj,field)
@@ -358,9 +376,9 @@ let transformDecl (externs: Map<Var,Declaration>) (decl: AlphaTransform.Declarat
         |> List.rev // extracted declarations must come first because the body of 'decl' may depend on those declarations
     | AlphaTransform.Declaration.TypeDecl(name,decl) ->
         let decl = match decl with
-                   | AlphaTransform.TyAlias(alias) -> TyAlias(alias)
-                   | AlphaTransform.Record(fields) -> Record(fields)
-        [TypeDecl(name,decl)]
+                   | AlphaTransform.TyAlias(alias) -> TyAlias(name,alias)
+                   | AlphaTransform.Record(fields) -> Record(RecordType(name,fields))
+        [TypeDecl(decl)]
 
 let transformDecls (externs: Var seq) (decls: AlphaTransform.Declaration seq): Declaration list =
     let externs = 

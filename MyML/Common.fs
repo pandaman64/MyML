@@ -9,6 +9,7 @@ with
 
 type Signature =   SigLiteral of Var
                  | SigArrow of Signature * Signature
+                 | SigTyVar of Var
 
 [<StructuredFormatDisplayAttribute("{AsString}")>]
 type Operator =   Add
