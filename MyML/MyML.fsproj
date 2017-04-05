@@ -60,6 +60,7 @@
     <Compile Include="Common.fs" />
     <Compile Include="Parser.fs" />
     <Compile Include="AlphaTransform.fs" />
+    <Compile Include="EarlyTypeInference.fs" />
     <Compile Include="Closure.fs" />
     <Compile Include="TypeInference.fs" />
     <Compile Include="CodeGen.fs" />

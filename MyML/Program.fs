@@ -1,11 +1,11 @@
 ﻿open FParsec
 open Common
 
+module ETI = EarlyTypeInference
+
 [<EntryPoint>]
 let main argv = 
     let source = """
-        type record = { field: Int; function: Int -> Int; };
-        let succ x = x + 1;
         let const x y = x;
         let constt x =
             let f y = x in
@@ -22,7 +22,7 @@ let main argv =
         printfn "%A" result*)
         let decls = AlphaTransform.alphaTransformDecls (Set.ofList []) decls
         //printfn "declarations: %A" decls
-        let extractedDecls = Closure.transformDecls [] decls
+        (*let extractedDecls = Closure.transformDecls [] decls
         printfn "closure transformed declarations:"
         for decl in extractedDecls do
             printfn "  %A" decl
@@ -55,6 +55,15 @@ let main argv =
             printfn "  %A" decl
         let info = new CodeGen.AssemblyInformation()
         let assembly = info.generateDecls inferredDecls
-        printfn "%s" (CodeGen.assemblyString assembly)
+        printfn "%s" (CodeGen.assemblyString assembly)*)
+        let environment = {
+            ETI.TypeSystem.variables = Map.empty;
+            ETI.TypeSystem.recordFields = Map.empty;
+            ETI.TypeSystem.typeAliases = Map.empty;
+            ETI.TypeSystem.typeVariables = ETI.TypeSystem.TypeVariableEnv(Map.empty)
+        }
+        let decls = ETI.inferDecls environment decls
+        for decl in decls do
+            printfn "%A" decl
     | Failure(msg,_,_) -> printfn "%s" msg
     0 // return an integer exit code

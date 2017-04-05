@@ -132,6 +132,14 @@ module State =
 
     let fmap f s =
         s >>= (fun x -> yaruzo{ return f x })
+    let rec mapM f xs = yaruzo{
+        match xs with
+        | [] -> return []
+        | x :: xs ->
+            let! x = f x
+            let! xs = mapM f xs
+            return x :: xs
+    }
     let rec forM xs = yaruzo{
         match xs with
         | [] -> return []
@@ -147,6 +155,28 @@ module State =
             f s x
             >>= fun s -> foldM f s xs
     let rec forEachM f xs = foldM (fun _ x -> f x) () xs
+
+    let ($) f x = f x
+
+    let sth f x = yaruzo{
+        let! s = get
+        let s' = f s
+        return exec s' x
+    }
+
+    let sthid x = sth id x
+
+    let test = yaruzo{
+        let! some = sthid $ yaruzo{
+            let! a = get
+            do! set (2 * a)
+            return a
+        }
+        do! set (some + 1)
+        return ()
+    }
+
+    let yatteiki s' = fmap (fun s -> eval s s') get
     
 module UnionFind =
     type Node<'a when 'a: equality> = { value: 'a; parent: Option<Node<'a>> ref; rank: int ref} 
