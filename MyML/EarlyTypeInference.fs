@@ -4,94 +4,93 @@ open Common
 open Common.State
 
 module TypeSystem =
+    [<StructuredFormatDisplayAttribute("{AsString}")>]
     type TVar = TVar of Var
+    with
+        member this.AsString =
+            let (TVar(Var(name))) = this
+            sprintf "'%s" name
+
     type Substitution = Map<TVar,Type>
-    and Substitutable = interface
-        abstract member Apply : Substitution -> Substitutable
-        abstract member freeTypeVariables : Set<TVar>
-    end
     and TRec = TRec of Map<Var,Type>
     and Type =   TVariable of TVar
                | TConstructor of Var
                | TArrow of Type * Type
                | TRecord of TRec
-                   interface Substitutable with
-                       member this.Apply (s: Substitution) = 
-                           match this with
-                           | TVariable(v) -> 
-                               match s.TryFind v with
-                               | Some(t) -> t :> Substitutable
-                               | None -> this :> Substitutable
-                           | TConstructor(_) -> this :> Substitutable
-                           | TArrow(f,x) -> 
-                                TArrow(downcast (f :> Substitutable).Apply s,downcast (x :> Substitutable).Apply s) :> Substitutable
-                           | TRecord(TRec(record)) -> 
-                               record
-                               |> Map.map (fun _ t -> downcast (t :> Substitutable).Apply s)
-                               |> TRec
-                               |> TRecord
-                               :> Substitutable
-                       member this.freeTypeVariables = 
-                           match this with
-                           | TVariable(v) -> Set.singleton v
-                           | TConstructor(_) -> Set.empty
-                           | TArrow(f,x) -> Set.union (f :> Substitutable).freeTypeVariables (x :> Substitutable).freeTypeVariables
-                           | TRecord(TRec(record)) -> 
-                               record
-                               |> Map.toSeq
-                               |> Seq.map snd
-                               |> Seq.map (fun t -> (t :> Substitutable).freeTypeVariables)
-                               |> Set.unionMany
+    with
+        member this.Apply (s: Substitution) = 
+            match this with
+            | TVariable(v) -> 
+                match s.TryFind v with
+                | Some(t) -> t
+                | None -> this
+            | TConstructor(_) -> this
+            | TArrow(f,x) -> 
+                TArrow(f.Apply s,x.Apply s)
+            | TRecord(TRec(record)) -> 
+                record
+                |> Map.map (fun _ t -> t.Apply s)
+                |> TRec
+                |> TRecord
+               
+        member this.freeTypeVariables = 
+            match this with
+            | TVariable(v) -> Set.singleton v
+            | TConstructor(_) -> Set.empty
+            | TArrow(f,x) -> Set.union f.freeTypeVariables x.freeTypeVariables
+            | TRecord(TRec(record)) -> 
+                record
+                |> Map.toSeq
+                |> Seq.map snd
+                |> Seq.map (fun t -> t.freeTypeVariables)
+                |> Set.unionMany
 
     type Scheme = 
         { bindings: Set<TVar>; type_: Type }
-        interface Substitutable with
-            member this.Apply s =
-                let s = this.bindings 
-                        |> Set.fold (fun s v -> Map.remove v s) s
-                upcast { bindings = this.bindings; type_ = downcast (this.type_ :> Substitutable).Apply s }
-            member this.freeTypeVariables =
-                (this.type_ :> Substitutable).freeTypeVariables - this.bindings   
+    with
+        member this.Apply s =
+            let s = this.bindings 
+                    |> Set.fold (fun s v -> Map.remove v s) s
+            { bindings = this.bindings; type_ = this.type_.Apply s }
+        member this.freeTypeVariables =
+            this.type_.freeTypeVariables - this.bindings   
 
     type TypeVariableEnv = 
         TypeVariableEnv of Map<TVar,Scheme>
-            interface Substitutable with
-                member this.Apply s =
-                    let (TypeVariableEnv(env)) = this
-                    env
-                    |> Map.map (fun _ scheme -> downcast (scheme :> Substitutable).Apply s)
-                    |> TypeVariableEnv
-                    :> Substitutable
-                member this.freeTypeVariables =
-                    let (TypeVariableEnv(env)) = this
-                    env
-                    |> Map.toSeq
-                    |> Seq.map snd
-                    |> Seq.map (fun scheme -> (scheme :> Substitutable).freeTypeVariables)
-                    |> Set.unionMany
+    with
+        member this.Apply s =
+            let (TypeVariableEnv(env)) = this
+            env
+            |> Map.map (fun _ scheme -> scheme.Apply s)
+            |> TypeVariableEnv
+                   
+        member this.freeTypeVariables =
+            let (TypeVariableEnv(env)) = this
+            env
+            |> Map.toSeq
+            |> Seq.map snd
+            |> Seq.map (fun scheme -> scheme.freeTypeVariables)
+            |> Set.unionMany
 
     let intType = TConstructor(Var("Int"))
     let boolType = TConstructor(Var("Bool"))
 
-    type Applicand<'a when 'a :> Substitutable> = Applicand of 'a
-
     type Environment = 
         { typeVariables: TypeVariableEnv; variables: Map<Var,Scheme>; recordFields: Map<Var,TRec>; typeAliases: Map<Var,Type> }
-        interface Substitutable with
-            member this.Apply s =
-                {
-                    typeVariables = downcast (this.typeVariables :> Substitutable).Apply s;
-                    variables = this.variables;
-                    recordFields = this.recordFields;
-                    typeAliases = this.typeAliases;
-                }
-                :> Substitutable
-            member this.freeTypeVariables =
-                (this.typeVariables :> Substitutable).freeTypeVariables
+    with
+        member this.Apply s =
+            {
+                typeVariables = this.typeVariables.Apply s;
+                variables = this.variables;
+                recordFields = this.recordFields;
+                typeAliases = this.typeAliases;
+            }
+        member this.freeTypeVariables =
+            this.typeVariables.freeTypeVariables
 
     let emptySubst: Substitution = Map.empty
     let composeSubst (s1: Substitution) (s2: Substitution) : Substitution = 
-        let s1 = s1 |> Map.map (fun _ t -> downcast (t :> Substitutable).Apply s2)
+        let s1 = s1 |> Map.map (fun _ t -> t.Apply s2)
         s2 
         |> Map.fold (fun s1 v t -> Map.add v t s1) s1
     let (<+) s1 s2 = composeSubst s1 s2
@@ -99,7 +98,7 @@ module TypeSystem =
         Seq.fold (fun s s' -> s <+ s') emptySubst xs
 
     let rec unify (t1: Type) (t2: Type) : Substitution =
-        let occurCheck (v: TVar) (t: Substitutable) : bool =
+        let occurCheck (v: TVar) (t: Type) : bool =
             t.freeTypeVariables.Contains v
         let bind (v: TVar) (t: Type) = 
             match t with
@@ -122,10 +121,10 @@ module TypeSystem =
 
     let instantiate (scheme: Scheme) : Type =
         let subst = Set.fold (fun s v -> Map.add v (newTyVar "a") s) emptySubst scheme.bindings
-        downcast (scheme.type_ :> Substitutable).Apply subst
+        scheme.type_.Apply subst
 
     let generalize (env: Environment) (type_: Type) : Scheme =
-        let bindings = (type_ :> Substitutable).freeTypeVariables - (env :> Substitutable).freeTypeVariables
+        let bindings = type_.freeTypeVariables - env.freeTypeVariables
         { bindings = bindings; type_ = type_ }
 
     let generalizeM (type_: Type) : State<Environment,Scheme> =
@@ -161,36 +160,36 @@ module Inner =
         | LetRec of Var * Expr * Expr
     and Expr = 
         { value: PlainExpr; type_: Type ref }
-        interface TS.Substitutable with
-            member this.Apply s =
-                let value = 
-                    match this.value with
-                    | Literal(_) -> this.value
-                    | VarRef(_) -> this.value
-                    | Apply(f,xs) -> 
-                        let f = downcast (f :> TS.Substitutable).Apply s
-                        let xs = xs |> List.map (fun x -> downcast (x :> TS.Substitutable).Apply s)
-                        Apply(f,xs)
-                    | BinOp(lhs,op,rhs) ->
-                        BinOp(downcast (lhs :> Substitutable).Apply s,op,downcast (rhs :> Substitutable).Apply s)
-                    | If(cond,ifTrue,ifFalse) -> 
-                        If(downcast (cond :> Substitutable).Apply s,downcast (ifTrue :> Substitutable).Apply s,downcast (ifFalse :> Substitutable).Apply s)
-                    | RecordLiteral(fields) ->
-                        fields
-                        |> Map.map (fun _ e -> downcast (e :> Substitutable).Apply s)
-                        |> RecordLiteral
-                    | RecordAccess(obj,field) -> RecordAccess(downcast (obj :> Substitutable).Apply s,field)
-                    | Fun(arguments,value) -> Fun(arguments,downcast (value :> Substitutable).Apply s)
-                    | Let(name,value,body) -> Let(name,downcast (value :> Substitutable).Apply s,downcast (body :> Substitutable).Apply s)
-                    | LetRec(name,value,body) -> LetRec(name,downcast (value :> Substitutable).Apply s,downcast (body :> Substitutable).Apply s)
-                upcast {
-                    value = value;
-                    type_ = ref (downcast (!this.type_ :> TS.Substitutable).Apply s)
-                }
-            member this.freeTypeVariables = (!this.type_ :> TS.Substitutable).freeTypeVariables
+    with
+        member this.Apply s =
+            let value = 
+                match this.value with
+                | Literal(_) -> this.value
+                | VarRef(_) -> this.value
+                | Apply(f,xs) -> 
+                    let f = f.Apply s
+                    let xs = xs |> List.map (fun x -> x.Apply s)
+                    Apply(f,xs)
+                | BinOp(lhs,op,rhs) ->
+                    BinOp(lhs.Apply s,op,rhs.Apply s)
+                | If(cond,ifTrue,ifFalse) -> 
+                    If(cond.Apply s,ifTrue.Apply s,ifFalse.Apply s)
+                | RecordLiteral(fields) ->
+                    fields
+                    |> Map.map (fun _ e -> e.Apply s)
+                    |> RecordLiteral
+                | RecordAccess(obj,field) -> RecordAccess(obj.Apply s,field)
+                | Fun(arguments,value) -> Fun(arguments,value.Apply s)
+                | Let(name,value,body) -> Let(name,value.Apply s,body.Apply s)
+                | LetRec(name,value,body) -> LetRec(name,value.Apply s,body.Apply s)
+            {
+                value = value;
+                type_ = ref ((!this.type_).Apply s)
+            }
+        member this.freeTypeVariables = (!this.type_).freeTypeVariables
 
     let updateType (x: Expr) (s: Substitution) : unit =
-        x.type_ := downcast (!x.type_ :> Substitutable).Apply s
+        x.type_ := (!x.type_).Apply s
     let addVariable name scheme = yaruzo{
         let! e = get
         do! set { 
@@ -200,8 +199,8 @@ module Inner =
             typeAliases = e.typeAliases
         }
     }
-    let apply s = yaruzo{
-        do! get >>= (fun e -> set (downcast (e :> TS.Substitutable).Apply s))
+    let apply s : State<Environment,unit> = yaruzo{
+        do! get >>= (fun e -> set (e.Apply s))
     }
 
     type PlainDeclaration =   LetDecl of Var * Expr
@@ -233,7 +232,7 @@ module Inner =
                 updateType f subst
                 List.fold (fun () x -> updateType x subst) () xs
 
-                return subst,{ value = Apply(f,xs); type_ = ref (downcast (fType :> Substitutable).Apply subst) }
+                return subst,{ value = Apply(f,xs); type_ = ref (fType.Apply subst) }
             | AlphaTransform.Expr.BinOp(lhs,op,rhs) ->
                 let! slhs,lhs = inferExpr lhs
                 let! srhs,rhs = inferExpr rhs
@@ -252,7 +251,7 @@ module Inner =
                 updateType lhs subst
                 updateType rhs subst
 
-                return slhs <+ srhs,{ value = BinOp(lhs,op,rhs); type_ = ref (downcast (retType :> Substitutable).Apply subst) }
+                return slhs <+ srhs,{ value = BinOp(lhs,op,rhs); type_ = ref (retType.Apply subst) }
             | AlphaTransform.Expr.VarRef(v) ->
                 let! variables = fmap (fun e -> e.variables) get
                 match variables.TryFind v with
