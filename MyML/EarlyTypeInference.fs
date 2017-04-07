@@ -125,10 +125,16 @@ module TypeSystem =
             | _ -> Map.add v t emptySubst
         match t1,t2 with
         | TConstructor(c1),TConstructor(c2) when c1 = c2 -> emptySubst
-        | TArrow(f1,x1),TArrow(f2,x2) -> (unify f1 f2) <+ (unify x1 x2)
+        | TArrow(f1,x1),TArrow(f2,x2) -> (unify x1 x2) <+ (unify f1 f2)
         | TVariable(v),t -> bind v t
         | t,TVariable(v) -> bind v t
         | _ -> failwithf "Type mismatch %A and %A" t1 t2
+    let unifyM (t1: Type) (t2: Type) : State<Environment,Substitution> =
+        let subst = unify t1 t2
+        yaruzo{
+            do! get >>= fun e -> set (e.Apply subst)
+            return subst
+        }
 
     let newTyVar =
         let mutable counter = 0
@@ -259,12 +265,13 @@ module Inner =
 
                 let retType = newTyVar "a"
                 let fType = List.foldBack (fun x retType -> TArrow(!x.type_,retType)) xs retType
-                let suni = unify !f.type_ fType
-                do! apply suni
+                let! suni = unifyM !f.type_ fType
 
                 let subst = sf <+ sxs <+ suni
                 updateType f subst
                 List.fold (fun () x -> updateType x subst) () xs
+
+                printfn "value: %A, subst = %A" f subst
 
                 return subst,{ value = Apply(f,xs); type_ = ref (retType.Apply subst) }
             | AlphaTransform.Expr.BinOp(lhs,op,rhs) ->
@@ -278,8 +285,7 @@ module Inner =
                     | Some(scheme) -> return instantiate scheme
                 }
                 let retType = newTyVar "a"
-                let suni = unify (TArrow(!lhs.type_,TArrow(!rhs.type_,retType))) opType
-                do! apply suni
+                let! suni = unifyM (TArrow(!lhs.type_,TArrow(!rhs.type_,retType))) opType
                 
                 let subst = slhs <+ srhs <+ suni
                 updateType lhs subst
@@ -294,13 +300,12 @@ module Inner =
             | AlphaTransform.Expr.If(cond,ifTrue,ifFalse) -> 
                 let! sc,cond = inferExpr cond
                 
-                let subst = unify !cond.type_ (boolType)
-                do! apply subst
+                let! subst = unifyM !cond.type_ (boolType)
 
                 let! sTrue,ifTrue = inferExpr ifTrue
                 let! sFalse,ifFalse = inferExpr ifFalse
                 
-                let subst = subst <+ unify !ifTrue.type_ !ifFalse.type_
+                let subst = sc <+ sTrue <+ sFalse <+ subst <+ unify !ifTrue.type_ !ifFalse.type_
                 do! apply subst
 
                 updateType cond subst
@@ -330,8 +335,7 @@ module Inner =
                                     match record.TryFind name with
                                     | None -> failwithf "field %A not found in record %A" name record
                                     | Some(type_) -> 
-                                        let suni = unify type_ !value.type_
-                                        do! apply suni
+                                        let! suni = unifyM type_ !value.type_
                                         return s <+ suni
                                 }) emptySubst
                     let subst = s <+ s'
@@ -383,8 +387,7 @@ module Inner =
                     return sv,value
                 }
                 
-                let suni = unify thisType !value.type_
-                do! apply suni
+                let! suni = unifyM thisType !value.type_
                 updateType value suni
 
                 let! subst,whole = yatteiki $ yaruzo{
@@ -483,8 +486,7 @@ module Inner =
                         let thisType = List.foldBack (fun (_,type_) retType -> TArrow(type_,retType)) arguments !value.type_
                         { value = Fun(arguments,value); type_ = ref thisType }
 
-                let suni = unify thisType !value.type_
-                do! apply suni
+                let! suni = unifyM thisType !value.type_
 
                 updateType value (sv <+ suni)
 
