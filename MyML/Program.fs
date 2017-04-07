@@ -57,10 +57,9 @@ let main argv =
         let assembly = info.generateDecls inferredDecls
         printfn "%s" (CodeGen.assemblyString assembly)*)
         let environment = {
-            ETI.TypeSystem.variables = Map.empty;
+            ETI.TypeSystem.variables = ETI.TypeSystem.Variables(Map.empty);
             ETI.TypeSystem.recordFields = Map.empty;
             ETI.TypeSystem.typeAliases = Map.empty;
-            ETI.TypeSystem.typeVariables = ETI.TypeSystem.TypeVariableEnv(Map.empty)
         }
         let decls = ETI.inferDecls environment decls
         for decl in decls do

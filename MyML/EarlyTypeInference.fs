@@ -13,7 +13,9 @@ module TypeSystem =
 
     type Substitution = Map<TVar,Type>
     and TRec = TRec of Map<Var,Type>
-    and Type =   TVariable of TVar
+    and 
+        [<StructuredFormatDisplayAttribute("{AsString}")>]
+        Type =   TVariable of TVar
                | TConstructor of Var
                | TArrow of Type * Type
                | TRecord of TRec
@@ -32,7 +34,6 @@ module TypeSystem =
                 |> Map.map (fun _ t -> t.Apply s)
                 |> TRec
                 |> TRecord
-               
         member this.freeTypeVariables = 
             match this with
             | TVariable(v) -> Set.singleton v
@@ -44,7 +45,17 @@ module TypeSystem =
                 |> Seq.map snd
                 |> Seq.map (fun t -> t.freeTypeVariables)
                 |> Set.unionMany
+        member this.AsString =
+            match this with
+            | TVariable(v) -> sprintf "%A" v
+            | TConstructor(Var(name)) -> sprintf "%s" name
+            | TArrow(f,x) -> sprintf "(%A -> %A)" f x
+            | TRecord(TRec(record)) ->
+                record
+                |> Map.fold (fun s (Var(field)) type_ -> String.concat " " [ s; sprintf "%A: %A" field type_ ]) ""
+                |> fun s -> sprintf "{ %s }" s
 
+    [<StructuredFormatDisplayAttribute("{AsString}")>]
     type Scheme = 
         { bindings: Set<TVar>; type_: Type }
     with
@@ -53,40 +64,47 @@ module TypeSystem =
                     |> Set.fold (fun s v -> Map.remove v s) s
             { bindings = this.bindings; type_ = this.type_.Apply s }
         member this.freeTypeVariables =
-            this.type_.freeTypeVariables - this.bindings   
-
-    type TypeVariableEnv = 
-        TypeVariableEnv of Map<TVar,Scheme>
-    with
-        member this.Apply s =
-            let (TypeVariableEnv(env)) = this
-            env
-            |> Map.map (fun _ scheme -> scheme.Apply s)
-            |> TypeVariableEnv
-                   
-        member this.freeTypeVariables =
-            let (TypeVariableEnv(env)) = this
-            env
-            |> Map.toSeq
-            |> Seq.map snd
-            |> Seq.map (fun scheme -> scheme.freeTypeVariables)
-            |> Set.unionMany
+            this.type_.freeTypeVariables - this.bindings
+        member this.AsString =
+            let bindingsString = Set.fold (fun s v -> sprintf "%sFA.%A" s v) "" this.bindings
+            sprintf "%s%A" bindingsString this.type_
 
     let intType = TConstructor(Var("Int"))
     let boolType = TConstructor(Var("Bool"))
 
+    type Variables = Variables of Map<Var,Scheme>
+    with
+        member this.Apply s =
+            let (Variables(variables)) = this
+            variables
+            |> Map.map (fun _ scheme -> scheme.Apply s)
+            |> Variables
+        member this.freeTypeVariables =
+            let (Variables(variables)) = this
+            variables
+            |> Map.toSeq
+            |> Seq.map snd
+            |> Seq.map (fun scheme -> scheme.freeTypeVariables)
+            |> Set.unionMany
+        member this.Add name scheme =
+            let (Variables(variables)) = this
+            Map.add name scheme variables
+            |> Variables
+        member this.TryFind name =
+            let (Variables(variables)) = this
+            variables.TryFind name
+
     type Environment = 
-        { typeVariables: TypeVariableEnv; variables: Map<Var,Scheme>; recordFields: Map<Var,TRec>; typeAliases: Map<Var,Type> }
+        { variables: Variables; recordFields: Map<Var,TRec>; typeAliases: Map<Var,Type> }
     with
         member this.Apply s =
             {
-                typeVariables = this.typeVariables.Apply s;
-                variables = this.variables;
+                variables = this.variables.Apply s;
                 recordFields = this.recordFields;
                 typeAliases = this.typeAliases;
             }
         member this.freeTypeVariables =
-            this.typeVariables.freeTypeVariables
+            this.variables.freeTypeVariables
 
     let emptySubst: Substitution = Map.empty
     let composeSubst (s1: Substitution) (s2: Substitution) : Substitution = 
@@ -130,23 +148,10 @@ module TypeSystem =
     let generalizeM (type_: Type) : State<Environment,Scheme> =
         get |> fmap (fun e -> generalize e type_)
 
-module TS = TypeSystem
-open TS
-
-module Thunk =
-    type Thunk<'a> =   Value of 'a
-                     | Thunk of (unit -> 'a)
-    let evalThunk thunk =
-        match !thunk with
-        | Value(v) -> v
-        | Thunk(t) ->
-            let v = t ()
-            thunk := Value v
-            v
-
-open Thunk
+open TypeSystem
 
 module Inner =
+    [<StructuredFormatDisplayAttribute("{AsString}")>]
     type PlainExpr =  
           Literal of int
         | Apply of Expr * Expr list
@@ -155,11 +160,30 @@ module Inner =
         | If of Expr * Expr * Expr
         | RecordLiteral of Map<Var,Expr>
         | RecordAccess of Expr * Var
-        | Fun of Var list * Expr
+        | Fun of (Var * Type) list * Expr
         | Let of Var * Expr * Expr
         | LetRec of Var * Expr * Expr
-    and Expr = 
-        { value: PlainExpr; type_: Type ref }
+    with
+        member this.AsString =
+            match this with
+            | Literal(x) -> sprintf "%d" x
+            | Apply(f,xs) -> sprintf "(%A %A)" f xs
+            | BinOp(lhs,op,rhs) -> sprintf "(%A %A %A)" lhs op rhs
+            | VarRef(Var(v)) -> sprintf "%A" v
+            | If(cond,ifTrue,ifFalse) -> sprintf "if %A then %A else %A" cond ifTrue ifFalse
+            | RecordLiteral(fields) ->
+                Map.fold (fun s (Var(field)) value -> sprintf "%s %s %A" s field value) "" fields
+                |> fun s -> sprintf "{ %s }" s
+            | RecordAccess(obj,Var(field)) -> sprintf "%A.%s" obj field
+            | Fun(arguments,value) ->
+                let arguments = arguments |> List.map (fun (Var(name),type_) -> sprintf "%s: %A" name type_) |> String.concat " "
+                sprintf "fun %s = %A" arguments value
+            | Let(Var(name),value,body) -> sprintf "let %s = %A in %A" name value body
+            | LetRec(Var(name),value,body) -> sprintf "let rec %s = %A in %A" name value body
+
+    and
+        [<StructuredFormatDisplayAttribute("{AsString}")>]
+        Expr = { value: PlainExpr; type_: Type ref }
     with
         member this.Apply s =
             let value = 
@@ -179,7 +203,7 @@ module Inner =
                     |> Map.map (fun _ e -> e.Apply s)
                     |> RecordLiteral
                 | RecordAccess(obj,field) -> RecordAccess(obj.Apply s,field)
-                | Fun(arguments,value) -> Fun(arguments,value.Apply s)
+                | Fun(arguments,value) -> Fun(arguments |> List.map (fun (name,type_) -> name,type_.Apply s),value.Apply s)
                 | Let(name,value,body) -> Let(name,value.Apply s,body.Apply s)
                 | LetRec(name,value,body) -> LetRec(name,value.Apply s,body.Apply s)
             {
@@ -187,14 +211,15 @@ module Inner =
                 type_ = ref ((!this.type_).Apply s)
             }
         member this.freeTypeVariables = (!this.type_).freeTypeVariables
+        member this.AsString =
+            sprintf "<%A: %A>" this.value !this.type_
 
     let updateType (x: Expr) (s: Substitution) : unit =
         x.type_ := (!x.type_).Apply s
     let addVariable name scheme = yaruzo{
         let! e = get
         do! set { 
-            typeVariables = e.typeVariables;
-            variables = Map.add name scheme e.variables;
+            variables = e.variables.Add name scheme;
             recordFields = e.recordFields;
             typeAliases = e.typeAliases
         }
@@ -203,28 +228,37 @@ module Inner =
         do! get >>= (fun e -> set (e.Apply s))
     }
 
+    [<StructuredFormatDisplayAttribute("{AsString}")>]
     type PlainDeclaration =   LetDecl of Var * Expr
                             | LetRecDecl of Var * Expr
-    type Declaration = { value: PlainDeclaration; scheme: TS.Scheme }
+    with
+        member this.AsString = 
+            match this with
+            | LetDecl(Var(name),value) -> sprintf "let %s = %A" name value
+            | LetRecDecl(Var(name),value) -> sprintf "let rec %s = %A" name value
+    [<StructuredFormatDisplayAttribute("{AsString}")>]
+    type Declaration = { value: PlainDeclaration; scheme: Scheme }
     with
         member this.Name = 
             match this.value with
             | LetDecl(name,_) 
             | LetRecDecl(name,_) -> name
+        member this.AsString =
+            sprintf "declaration %A %A" this.scheme this.value
     
-    let rec inferExpr (expr: AlphaTransform.Expr) : State<TS.Environment,TS.Substitution * Expr> = 
+    let rec inferExpr (expr: AlphaTransform.Expr) : State<Environment,Substitution * Expr> = 
         yaruzo{
             match expr with
-            | AlphaTransform.Expr.Literal(x) -> return Map.empty,{ value = Literal(x); type_ = ref (TS.intType) }
+            | AlphaTransform.Expr.Literal(x) -> return Map.empty,{ value = Literal(x); type_ = ref (intType) }
             | AlphaTransform.Expr.Apply(f,xs) -> 
                 let! sf,f = inferExpr f
                 let! sxs,xs = foldM (fun (s,xs) x -> yaruzo{
                                  let! s',x = inferExpr x
                                  return s <+ s',x :: xs
-                              }) (TS.emptySubst,[]) xs
+                              }) (emptySubst,[]) xs
 
                 let retType = newTyVar "a"
-                let fType = xs |> List.fold (fun t x -> TArrow(!x.type_,t)) retType
+                let fType = List.foldBack (fun x retType -> TArrow(!x.type_,retType)) xs retType
                 let suni = unify !f.type_ fType
                 do! apply suni
 
@@ -232,7 +266,7 @@ module Inner =
                 updateType f subst
                 List.fold (fun () x -> updateType x subst) () xs
 
-                return subst,{ value = Apply(f,xs); type_ = ref (fType.Apply subst) }
+                return subst,{ value = Apply(f,xs); type_ = ref (retType.Apply subst) }
             | AlphaTransform.Expr.BinOp(lhs,op,rhs) ->
                 let! slhs,lhs = inferExpr lhs
                 let! srhs,rhs = inferExpr rhs
@@ -315,20 +349,21 @@ module Inner =
                 | _ -> failwithf "%A is not a record" obj
             | AlphaTransform.Expr.Let(name,arguments,value,body) ->
                 let arguments = List.map (fun arg -> arg,newTyVar "a") arguments
-                let! sv,value = yatteiki $ yaruzo{
+                let! sv,value,valueScheme = yatteiki $ yaruzo{
                     do! forEachM (fun (arg,type_) -> addVariable arg { bindings = Set.empty; type_ = type_ }) arguments
                     let! sv,value = inferExpr value
-                    return sv,value
-                }
-                let! subst,whole = yatteiki $ yaruzo{
                     let value = 
                         if arguments.IsEmpty then value 
-                        else
+                        else    
                             let type_ = List.foldBack (fun (_,type_) funType -> TArrow(type_,funType)) arguments !value.type_
-                            let arguments = List.map fst arguments
                             { value = Fun(arguments,value); type_ = ref type_ }
-                    
-                    do! generalizeM !value.type_ >>= addVariable name 
+                    do! get |> fmap (fun e -> printfn "env %A" e)
+                    printfn "%A" value
+                    let! valueScheme = generalizeM !value.type_
+                    return sv,value,valueScheme
+                }
+                let! subst,whole = yatteiki $ yaruzo{
+                    do! addVariable name valueScheme
 
                     let! sb,body = inferExpr body
                     let subst = sv <+ sb
@@ -357,7 +392,6 @@ module Inner =
                         if arguments.IsEmpty then value 
                         else
                             let type_ = List.foldBack (fun (_,type_) funType -> TArrow(type_,funType)) arguments !value.type_
-                            let arguments = List.map fst arguments
                             { value = Fun(arguments,value); type_ = ref type_ }
                     
                     do! generalizeM !value.type_ >>= addVariable name 
@@ -371,7 +405,7 @@ module Inner =
                 }
                 return subst,whole
         }
-    let inferDecl (decl: AlphaTransform.Declaration) : State<TS.Environment,Option<Declaration>> = 
+    let inferDecl (decl: AlphaTransform.Declaration) : State<Environment,Option<Declaration>> = 
         let rec parseSignature signature = yaruzo{
             match signature with
             | SigLiteral(name) -> 
@@ -394,7 +428,6 @@ module Inner =
                     let! e = get
                     do! set {
                         typeAliases = Map.add name type_ e.typeAliases;
-                        typeVariables = e.typeVariables;
                         variables = e.variables;
                         recordFields = e.recordFields
                     }
@@ -411,7 +444,6 @@ module Inner =
                     let! e = get
                     do! set {
                         typeAliases = Map.add name type_ e.typeAliases;
-                        typeVariables = e.typeVariables;
                         variables = e.variables;
                         recordFields = Map.fold (fun recordFields name _ -> Map.add name recordType recordFields) e.recordFields fields
                     }
@@ -427,8 +459,7 @@ module Inner =
                     match arguments with
                     | [] -> value
                     | _ -> 
-                        let thisType = List.fold (fun retType (_,type_) -> TArrow(type_,retType)) !value.type_ arguments 
-                        let arguments = List.map fst arguments
+                        let thisType = List.foldBack (fun (_,type_) retType -> TArrow(type_,retType)) arguments !value.type_
                         { value = Fun(arguments,value); type_ = ref thisType }
 
                 updateType value sv
@@ -449,8 +480,7 @@ module Inner =
                     match arguments with
                     | [] -> value
                     | _ -> 
-                        let thisType = List.fold (fun retType (_,type_) -> TArrow(type_,retType)) !value.type_ arguments 
-                        let arguments = List.map fst arguments
+                        let thisType = List.foldBack (fun (_,type_) retType -> TArrow(type_,retType)) arguments !value.type_
                         { value = Fun(arguments,value); type_ = ref thisType }
 
                 let suni = unify thisType !value.type_
