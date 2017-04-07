@@ -154,6 +154,14 @@ module State =
         | x :: xs ->
             f s x
             >>= fun s -> foldM f s xs
+    let rec foldBackM f s xs =
+        match xs with
+        | [] -> yaruzo { return s }
+        | x :: xs -> yaruzo{
+            let! s = foldM f s xs
+            let! ret = f s x
+            return ret
+        }
     let rec forEachM f xs = foldM (fun _ x -> f x) () xs
 
     let ($) f x = f x
